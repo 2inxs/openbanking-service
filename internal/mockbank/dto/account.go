@@ -63,7 +63,7 @@ func ToAccountDTO(acc model.Account) AccountDTO {
 	}
 }
 
-func formatAmount(minor int64) string {
+func FormatAmount(minor int64) string {
 	units := minor / 100
 	kop := minor % 100
 	return fmt.Sprintf("%d.%02d", units, kop)

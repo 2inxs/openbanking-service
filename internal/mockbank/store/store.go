@@ -108,14 +108,14 @@ func (s *Store) AddTransaction(trx model.Transaction) error {
 	if !ok {
 		return fmt.Errorf("счет %q: %w", trx.AccountID, ErrNotFound)
 	}
-	if trx.AmountKop <= 0 {
-		return fmt.Errorf("неверная сумма %d", trx.AmountKop)
+	if trx.Amount <= 0 {
+		return fmt.Errorf("неверная сумма %d", trx.Amount)
 	}
 	switch trx.Direction {
 	case model.Credit:
-		acc.BalanceKop += trx.AmountKop
+		acc.BalanceKop += trx.Amount
 	case model.Debit:
-		acc.BalanceKop -= trx.AmountKop
+		acc.BalanceKop -= trx.Amount
 	default:
 		return fmt.Errorf("неизвестный счет %q", trx.Direction)
 	}

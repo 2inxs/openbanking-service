@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/2inxs/openbanking-service/internal/mockbank"
+	"github.com/2inxs/openbanking-service/internal/mockbank/service"
 	"github.com/2inxs/openbanking-service/internal/mockbank/store"
 )
 
@@ -20,10 +21,11 @@ func main() {
 	if err := store.SeedDemoData(dataStore); err != nil {
 		log.Fatal(err)
 	}
+	svc := service.New(dataStore)
 
 	serv := &http.Server{
 		Addr:              addr,
-		Handler:           mockbank.NewHandler(dataStore),
+		Handler:           mockbank.NewHandler(svc),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	log.Printf("Listening on %s", serv.Addr)

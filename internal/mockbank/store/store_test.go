@@ -155,18 +155,18 @@ func TestTransactionsReturnsCopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	original := txs[0].AmountKop
+	original := txs[0].Amount
 	changedID := txs[0].ID
 
-	txs[0].AmountKop = 999_999_999
+	txs[0].Amount = 999_999_999
 
 	again, err := s.GetTransactionsByAccount("acc-001")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, tx := range again {
-		if tx.ID == changedID && tx.AmountKop != original {
-			t.Fatalf("store was changed through returned slice: amount %d, want %d", tx.AmountKop, original)
+		if tx.ID == changedID && tx.Amount != original {
+			t.Fatalf("store was changed through returned slice: amount %d, want %d", tx.Amount, original)
 		}
 	}
 }
@@ -239,7 +239,7 @@ func TestAddTransactionChangesBalance(t *testing.T) {
 			err := s.AddTransaction(model.Transaction{
 				ID:        "tx-1",
 				AccountID: "acc-1",
-				AmountKop: tt.amount,
+				Amount:    tt.amount,
 				Direction: tt.direction,
 				Status:    model.TransactionBooked,
 				BookedAt:  time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC),
@@ -263,7 +263,7 @@ func TestAddTransactionInvalid(t *testing.T) {
 	valid := model.Transaction{
 		ID:        "tx-1",
 		AccountID: "acc-1",
-		AmountKop: 10_000,
+		Amount:    10_000,
 		Direction: model.Debit,
 		Status:    model.TransactionBooked,
 		BookedAt:  time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC),
@@ -275,8 +275,8 @@ func TestAddTransactionInvalid(t *testing.T) {
 		wantErr error
 	}{
 		{name: "unknown account", modify: func(tx *model.Transaction) { tx.AccountID = "acc-999" }, wantErr: ErrNotFound},
-		{name: "zero amount", modify: func(tx *model.Transaction) { tx.AmountKop = 0 }},
-		{name: "negative amount", modify: func(tx *model.Transaction) { tx.AmountKop = -100 }},
+		{name: "zero amount", modify: func(tx *model.Transaction) { tx.Amount = 0 }},
+		{name: "negative amount", modify: func(tx *model.Transaction) { tx.Amount = -100 }},
 		{name: "unknown direction", modify: func(tx *model.Transaction) { tx.Direction = "Debet" }},
 		{name: "empty direction", modify: func(tx *model.Transaction) { tx.Direction = "" }},
 	}
@@ -315,7 +315,7 @@ func TestConcurrentAddTransaction(t *testing.T) {
 			err := s.AddTransaction(model.Transaction{
 				ID:        fmt.Sprintf("tx-%d", i),
 				AccountID: "acc-1",
-				AmountKop: 1,
+				Amount:    1,
 				Direction: model.Credit,
 				Status:    model.TransactionBooked,
 				BookedAt:  time.Date(2026, 11, 20, 12, 0, i, 0, time.UTC),

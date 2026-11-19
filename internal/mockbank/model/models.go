@@ -58,7 +58,7 @@ type Card struct {
 type Transaction struct {
 	ID           string
 	AccountID    string
-	AmountKop    int64
+	Amount       int64
 	Direction    CreditDebit
 	Status       TransactionStatus
 	BookedAt     time.Time

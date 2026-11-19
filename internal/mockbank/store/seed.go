@@ -101,38 +101,38 @@ func SeedDemoData(s *Store) error {
 		// --- acc-001: Анна, основной счёт (RUB) ---
 		{
 			ID: "tx-0006", AccountID: "acc-001",
-			AmountKop: minor(890, 0), Direction: model.Debit, Status: model.TransactionPending,
+			Amount: minor(890, 0), Direction: model.Debit, Status: model.TransactionPending,
 			BookedAt: at(18, 19, 40), ValueAt: at(18, 19, 40),
 			Description: "Оплата в аптеке", MerchantName: "Аптека «Здоровье»", MCC: "5912", ByCard: true,
 		},
 		{
 			ID: "tx-0001", AccountID: "acc-001",
-			AmountKop: minor(80_000, 0), Direction: model.Credit, Status: model.TransactionBooked,
+			Amount: minor(80_000, 0), Direction: model.Credit, Status: model.TransactionBooked,
 			BookedAt: at(5, 10, 0), ValueAt: at(5, 10, 0),
 			Description: "Зарплата за октябрь", MerchantName: "", MCC: "", ByCard: false,
 		},
 		{
 			ID: "tx-0002", AccountID: "acc-001",
-			AmountKop: minor(3_456, 70), Direction: model.Debit, Status: model.TransactionBooked,
+			Amount: minor(3_456, 70), Direction: model.Debit, Status: model.TransactionBooked,
 			BookedAt: at(6, 18, 25), ValueAt: at(6, 18, 25),
 			Description: "Покупка продуктов", MerchantName: "Супермаркет «Колос»", MCC: "5411", ByCard: true,
 		},
 		// Две настоящие одинаковые покупки: одна сумма, магазин и время, но разные ID (требование #14).
 		{
 			ID: "tx-0004", AccountID: "acc-001",
-			AmountKop: minor(350, 0), Direction: model.Debit, Status: model.TransactionBooked,
+			Amount: minor(350, 0), Direction: model.Debit, Status: model.TransactionBooked,
 			BookedAt: at(7, 9, 15), ValueAt: at(7, 9, 15),
 			Description: "Оплата в кафе", MerchantName: "Кофейня «Зерно»", MCC: "5814", ByCard: true,
 		},
 		{
 			ID: "tx-0005", AccountID: "acc-001",
-			AmountKop: minor(350, 0), Direction: model.Debit, Status: model.TransactionBooked,
+			Amount: minor(350, 0), Direction: model.Debit, Status: model.TransactionBooked,
 			BookedAt: at(7, 9, 15), ValueAt: at(7, 9, 15),
 			Description: "Оплата в кафе", MerchantName: "Кофейня «Зерно»", MCC: "5814", ByCard: true,
 		},
 		{
 			ID: "tx-0003", AccountID: "acc-001",
-			AmountKop: minor(612, 0), Direction: model.Debit, Status: model.TransactionBooked,
+			Amount: minor(612, 0), Direction: model.Debit, Status: model.TransactionBooked,
 			BookedAt: at(6, 23, 10), ValueAt: at(6, 23, 10),
 			Description: "Поездка на такси", MerchantName: "Такси «Быстро»", MCC: "4121", ByCard: true,
 		},
@@ -140,13 +140,13 @@ func SeedDemoData(s *Store) error {
 		// --- acc-002: Анна, кредитная карта (RUB) ---
 		{
 			ID: "tx-0007", AccountID: "acc-002",
-			AmountKop: minor(4_200, 0), Direction: model.Debit, Status: model.TransactionBooked,
+			Amount: minor(4_200, 0), Direction: model.Debit, Status: model.TransactionBooked,
 			BookedAt: at(9, 20, 30), ValueAt: at(9, 20, 30),
 			Description: "Ужин в ресторане", MerchantName: "Ресторан «Печь»", MCC: "5812", ByCard: true,
 		},
 		{
 			ID: "tx-0008", AccountID: "acc-002",
-			AmountKop: minor(12_990, 0), Direction: model.Debit, Status: model.TransactionBooked,
+			Amount: minor(12_990, 0), Direction: model.Debit, Status: model.TransactionBooked,
 			BookedAt: at(12, 14, 5), ValueAt: at(12, 14, 5),
 			Description: "Покупка электроники", MerchantName: "Магазин «Техно»", MCC: "5732", ByCard: true,
 		},
@@ -154,13 +154,13 @@ func SeedDemoData(s *Store) error {
 		// --- acc-003: Анна, накопительный (USD) ---
 		{
 			ID: "tx-0010", AccountID: "acc-003",
-			AmountKop: minor(2, 50), Direction: model.Credit, Status: model.TransactionBooked,
+			Amount: minor(2, 50), Direction: model.Credit, Status: model.TransactionBooked,
 			BookedAt: at(15, 0, 5), ValueAt: at(15, 0, 5),
 			Description: "Начисление процентов", MerchantName: "", MCC: "", ByCard: false,
 		},
 		{
 			ID: "tx-0009", AccountID: "acc-003",
-			AmountKop: minor(100, 0), Direction: model.Credit, Status: model.TransactionBooked,
+			Amount: minor(100, 0), Direction: model.Credit, Status: model.TransactionBooked,
 			BookedAt: at(3, 11, 0), ValueAt: at(3, 11, 0),
 			Description: "Пополнение счёта", MerchantName: "", MCC: "", ByCard: false,
 		},
@@ -168,26 +168,26 @@ func SeedDemoData(s *Store) error {
 		// --- acc-004: Борис, зарплатный (RUB) ---
 		{
 			ID: "tx-0011", AccountID: "acc-004",
-			AmountKop: minor(65_000, 0), Direction: model.Credit, Status: model.TransactionBooked,
+			Amount: minor(65_000, 0), Direction: model.Credit, Status: model.TransactionBooked,
 			BookedAt: at(10, 9, 0), ValueAt: at(10, 9, 0),
 			Description: "Зарплата за октябрь", MerchantName: "", MCC: "", ByCard: false,
 		},
 		{
 			ID: "tx-0013", AccountID: "acc-004",
-			AmountKop: minor(5_870, 40), Direction: model.Debit, Status: model.TransactionBooked,
+			Amount: minor(5_870, 40), Direction: model.Debit, Status: model.TransactionBooked,
 			BookedAt: at(14, 12, 0), ValueAt: at(14, 12, 0),
 			Description: "Оплата ЖКХ", MerchantName: "УК «Дом»", MCC: "4900", ByCard: false,
 		},
 		{
 			ID: "tx-0012", AccountID: "acc-004",
-			AmountKop: minor(2_134, 0), Direction: model.Debit, Status: model.TransactionBooked,
+			Amount: minor(2_134, 0), Direction: model.Debit, Status: model.TransactionBooked,
 			BookedAt: at(11, 19, 45), ValueAt: at(11, 19, 45),
 			Description: "Покупка продуктов", MerchantName: "Супермаркет «Колос»", MCC: "5411", ByCard: true,
 		},
 		// --- acc-005: Борис, закрытый вклад (RUB) ---
 		{
 			ID: "tx-0014", AccountID: "acc-005",
-			AmountKop: minor(3_000, 0), Direction: model.Debit, Status: model.TransactionBooked,
+			Amount: minor(3_000, 0), Direction: model.Debit, Status: model.TransactionBooked,
 			BookedAt: at(2, 10, 0), ValueAt: at(2, 10, 0),
 			Description: "Закрытие вклада, перевод на счёт", MerchantName: "", MCC: "", ByCard: false,
 		},
