@@ -23,6 +23,7 @@ func TestRecoverMiddleware(t *testing.T) {
 		panic("unexpected nil pointer")
 	})
 
+	// Logging оборачивает Recover, чтобы перехватить итоговый статус 500, выставленный Recover
 	chain := middleware.RequestID(
 		middleware.Logging(log)(
 			middleware.Recover(log)(panicHandler),
@@ -42,30 +43,40 @@ func TestRecoverMiddleware(t *testing.T) {
 		t.Errorf("expected X-Request-Id header, got %q", rec.Header().Get("X-Request-Id"))
 	}
 
-	// В ответе клиенту не должно быть текста паники или стека
 	body := rec.Body.String()
 	if strings.Contains(body, "unexpected nil pointer") || strings.Contains(body, "goroutine") {
 		t.Fatalf("response leaked internal panic details: %s", body)
 	}
 
-	// В логах должна быть запись о панике со стеком и request_id
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
-	if len(lines) == 0 {
-		t.Fatal("expected log output, got empty")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 log lines, got %d: %s", len(lines), buf.String())
 	}
 
-	var entry map[string]any
-	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
-		t.Fatalf("invalid json log: %v", err)
+	// Первая запись — из Recover (срабатывает раньше при раскрутке стека)
+	var panicEntry map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &panicEntry); err != nil {
+		t.Fatalf("invalid json log at line 0: %v", err)
 	}
-
-	if entry["msg"] != "panic recovered" {
-		t.Errorf("expected msg='panic recovered', got %v", entry["msg"])
+	if panicEntry["msg"] != "panic recovered" {
+		t.Errorf("expected msg='panic recovered', got %v", panicEntry["msg"])
 	}
-	if entry["request_id"] != "panic-req-777" {
-		t.Errorf("expected request_id='panic-req-777', got %v", entry["request_id"])
+	if panicEntry["request_id"] != "panic-req-777" {
+		t.Errorf("expected request_id='panic-req-777', got %v", panicEntry["request_id"])
 	}
-	if entry["stack"] == "" {
+	if panicEntry["stack"] == "" {
 		t.Error("expected non-empty stack trace in log")
+	}
+
+	// Вторая запись — итоговый лог HTTP-запроса из Logging со статусом 500
+	var reqEntry map[string]any
+	if err := json.Unmarshal([]byte(lines[1]), &reqEntry); err != nil {
+		t.Fatalf("invalid json log at line 1: %v", err)
+	}
+	if reqEntry["msg"] != "http request" {
+		t.Errorf("expected msg='http request', got %v", reqEntry["msg"])
+	}
+	if reqEntry["status"] != float64(http.StatusInternalServerError) {
+		t.Errorf("expected status 500 in http request log, got %v", reqEntry["status"])
 	}
 }
