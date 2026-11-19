@@ -106,6 +106,7 @@ func TestContextFields_Concurrent(t *testing.T) {
 	ctx := logger.WithFields(context.Background(), func(f *logger.ContextFields) {
 		f.RequestID = "req-concurrent"
 	})
+	ctx, state := logger.WithRequestState(ctx)
 
 	const goroutines = 20
 	done := make(chan struct{}, goroutines)
@@ -114,10 +115,15 @@ func TestContextFields_Concurrent(t *testing.T) {
 		go func(id int) {
 			defer func() { done <- struct{}{} }()
 			if id%2 == 0 {
-				logger.WithFields(ctx, func(f *logger.ContextFields) {
-					f.UserID = "user-updated"
+				childCtx := logger.WithFields(ctx, func(f *logger.ContextFields) {
+					f.BankID = "bank-child"
 				})
+				if logger.FieldsFromContext(childCtx).BankID != "bank-child" {
+					t.Errorf("expected child BankID=bank-child")
+				}
+				logger.SetRequestUserID(ctx, "user-updated")
 			} else {
+				_ = state.UserID()
 				log.InfoContext(ctx, "concurrent log")
 			}
 		}(i)
@@ -131,7 +137,10 @@ func TestContextFields_Concurrent(t *testing.T) {
 	if got.RequestID != "req-concurrent" {
 		t.Errorf("expected RequestID=req-concurrent, got %q", got.RequestID)
 	}
-	if got.UserID != "user-updated" {
-		t.Errorf("expected UserID=user-updated, got %q", got.UserID)
+	if got.UserID != "" || got.BankID != "" {
+		t.Errorf("expected parent context to remain immutable, got UserID=%q BankID=%q", got.UserID, got.BankID)
+	}
+	if state.UserID() != "user-updated" {
+		t.Errorf("expected RequestState UserID=user-updated, got %q", state.UserID())
 	}
 }
