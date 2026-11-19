@@ -28,7 +28,7 @@ type AccountSubType string
 const (
 	CurrentAccount AccountSubType = "CurrentAccount"
 	CreditCard     AccountSubType = "CreditCard"
-	Savings        AccountSubType = "Saving"
+	Savings        AccountSubType = "Savings"
 )
 
 type Client struct {
