@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/2inxs/openbanking-service/internal/infrastructure/logger"
+	"github.com/2inxs/openbanking-service/pkg/logger"
 )
 
 func TestLogger_SanitizesSensitiveData(t *testing.T) {
@@ -93,5 +93,45 @@ func TestLogger_InvalidLevel(t *testing.T) {
 	_, err := logger.New("verbose", nil)
 	if err == nil {
 		t.Fatal("expected error for invalid log level, got nil")
+	}
+}
+
+func TestContextFields_Concurrent(t *testing.T) {
+	var buf bytes.Buffer
+	log, err := logger.New("info", &buf)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	ctx := logger.WithFields(context.Background(), func(f *logger.ContextFields) {
+		f.RequestID = "req-concurrent"
+	})
+
+	const goroutines = 20
+	done := make(chan struct{}, goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		go func(id int) {
+			defer func() { done <- struct{}{} }()
+			if id%2 == 0 {
+				logger.WithFields(ctx, func(f *logger.ContextFields) {
+					f.UserID = "user-updated"
+				})
+			} else {
+				log.InfoContext(ctx, "concurrent log")
+			}
+		}(i)
+	}
+
+	for i := 0; i < goroutines; i++ {
+		<-done
+	}
+
+	got := logger.FieldsFromContext(ctx)
+	if got.RequestID != "req-concurrent" {
+		t.Errorf("expected RequestID=req-concurrent, got %q", got.RequestID)
+	}
+	if got.UserID != "user-updated" {
+		t.Errorf("expected UserID=user-updated, got %q", got.UserID)
 	}
 }

@@ -39,7 +39,8 @@ func (rw *responseWriter) Unwrap() http.ResponseWriter {
 }
 
 // Logging логирует метаданные каждого HTTP-запроса.
-// В цепочке должен стоять после RequestID и Recover.
+// В цепочке стоит после RequestID и перед Recover (RequestID -> Logging -> Recover),
+// чтобы перехватывать итоговый статус 500, выставленный при панике.
 func Logging(log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

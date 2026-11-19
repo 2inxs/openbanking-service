@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/2inxs/openbanking-service/internal/delivery/http/middleware"
-	"github.com/2inxs/openbanking-service/internal/infrastructure/logger"
+	"github.com/2inxs/openbanking-service/pkg/logger"
 )
 
 func TestRecoverMiddleware(t *testing.T) {

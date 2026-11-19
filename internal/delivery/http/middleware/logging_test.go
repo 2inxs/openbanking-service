@@ -8,19 +8,19 @@ import (
 	"testing"
 
 	"github.com/2inxs/openbanking-service/internal/delivery/http/middleware"
-	"github.com/2inxs/openbanking-service/internal/infrastructure/logger"
+	logger2 "github.com/2inxs/openbanking-service/pkg/logger"
 )
 
 func TestLoggingMiddleware(t *testing.T) {
 	var buf bytes.Buffer
-	log, err := logger.New("info", &buf)
+	log, err := logger2.New("info", &buf)
 	if err != nil {
 		t.Fatalf("failed to init logger: %v", err)
 	}
 
 	// Имитируем бизнес-хендлер, перед которым отработал Auth и положил UserID в контекст
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		logger.WithFields(r.Context(), func(f *logger.ContextFields) {
+		logger2.WithFields(r.Context(), func(f *logger2.ContextFields) {
 			f.UserID = "user-999"
 		})
 		w.WriteHeader(http.StatusCreated)

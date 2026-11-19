@@ -3,6 +3,7 @@ package logger
 import (
 	"context"
 	"log/slog"
+	"sync"
 )
 
 type ctxKey int
@@ -21,27 +22,39 @@ type ContextFields struct {
 	InteractionID string // x-fapi-interaction-id для запросов к банкам
 }
 
+// contextHolder защищает общие метаданные запроса от гонок данных,
+// если внутри хендлера запускаются дочерние горутины с тем же ctx.
+type contextHolder struct {
+	mu     sync.RWMutex
+	fields ContextFields
+}
+
 // WithFields добавляет или обновляет поля логирования в контексте.
 func WithFields(ctx context.Context, fn func(*ContextFields)) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if existing, ok := ctx.Value(fieldsKey).(*ContextFields); ok && existing != nil {
-		fn(existing)
+	if holder, ok := ctx.Value(fieldsKey).(*contextHolder); ok && holder != nil {
+		holder.mu.Lock()
+		fn(&holder.fields)
+		holder.mu.Unlock()
 		return ctx
 	}
-	fields := &ContextFields{}
-	fn(fields)
-	return context.WithValue(ctx, fieldsKey, fields)
+
+	holder := &contextHolder{}
+	fn(&holder.fields)
+	return context.WithValue(ctx, fieldsKey, holder)
 }
 
-// FieldsFromContext извлекает метаданные из контекста.
+// FieldsFromContext потокобезопасно возвращает снимок метаданных из контекста.
 func FieldsFromContext(ctx context.Context) ContextFields {
 	if ctx == nil {
 		return ContextFields{}
 	}
-	if f, ok := ctx.Value(fieldsKey).(*ContextFields); ok && f != nil {
-		return *f
+	if holder, ok := ctx.Value(fieldsKey).(*contextHolder); ok && holder != nil {
+		holder.mu.RLock()
+		defer holder.mu.RUnlock()
+		return holder.fields
 	}
 	return ContextFields{}
 }

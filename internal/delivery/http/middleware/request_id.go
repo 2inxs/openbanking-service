@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"net/http"
 
-	"github.com/2inxs/openbanking-service/internal/infrastructure/logger"
+	"github.com/2inxs/openbanking-service/pkg/logger"
 )
 
 const (

@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"runtime/debug"
 
-	"github.com/2inxs/openbanking-service/internal/infrastructure/logger"
+	"github.com/2inxs/openbanking-service/pkg/logger"
 )
 
 type errorResponse struct {
