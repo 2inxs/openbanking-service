@@ -18,7 +18,6 @@ func TestLoggingMiddleware(t *testing.T) {
 		t.Fatalf("failed to init logger: %v", err)
 	}
 
-	// Имитируем бизнес-хендлер, перед которым отработал Auth и зафиксировал UserID для access-лога
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := logger2.SetRequestUserID(r.Context(), "user-999")
 		r = r.WithContext(ctx)
@@ -71,14 +70,17 @@ func TestLoggingMiddleware_IgnoresInformational1xx(t *testing.T) {
 		_, _ = w.Write([]byte(`{"created":true}`))
 	})
 
-	chain := middleware.Logging(log)(handler)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/items", nil)
-	rec := httptest.NewRecorder()
+	srv := httptest.NewServer(middleware.Logging(log)(handler))
+	defer srv.Close()
 
-	chain.ServeHTTP(rec, req)
+	resp, err := srv.Client().Post(srv.URL+"/api/v1/items", "application/json", nil)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
 
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("expected response status 201, got %d", rec.Code)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected response status 201, got %d", resp.StatusCode)
 	}
 
 	var entry map[string]any
