@@ -1,4 +1,4 @@
-package mockbank
+package model
 
 import "time"
 

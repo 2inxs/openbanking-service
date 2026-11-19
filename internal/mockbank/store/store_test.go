@@ -1,4 +1,4 @@
-package mockbank
+package store
 
 import (
 	"errors"
@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/2inxs/openbanking-service/internal/mockbank/model"
 )
 
 func newSeededStore(t *testing.T) *Store {
@@ -20,10 +22,10 @@ func newSeededStore(t *testing.T) *Store {
 func newStoreWithAccount(t *testing.T, balance int64) *Store {
 	t.Helper()
 	s := NewStore()
-	if err := s.AddClient(Client{ID: "cl-1", FullName: "Тест Тестов"}); err != nil {
+	if err := s.AddClient(model.Client{ID: "cl-1", FullName: "Тест Тестов"}); err != nil {
 		t.Fatalf("AddClient: %v", err)
 	}
-	if err := s.AddAccount(Account{ID: "acc-1", ClientID: "cl-1", Currency: "RUB", BalanceKop: balance}); err != nil {
+	if err := s.AddAccount(model.Account{ID: "acc-1", ClientID: "cl-1", Currency: "RUB", BalanceKop: balance}); err != nil {
 		t.Fatalf("AddAccount: %v", err)
 	}
 	return s
@@ -171,7 +173,7 @@ func TestTransactionsReturnsCopy(t *testing.T) {
 
 func TestAddClientDuplicate(t *testing.T) {
 	s := newSeededStore(t)
-	err := s.AddClient(Client{ID: "cl-001", FullName: "Дубликат"})
+	err := s.AddClient(model.Client{ID: "cl-001", FullName: "Дубликат"})
 	if !errors.Is(err, ErrAlreadyExists) {
 		t.Fatalf("got error %v, want ErrAlreadyExists", err)
 	}
@@ -183,7 +185,7 @@ func TestAddClientDuplicate(t *testing.T) {
 
 func TestAddAccountUnknownClient(t *testing.T) {
 	s := newSeededStore(t)
-	err := s.AddAccount(Account{ID: "acc-new", ClientID: "cl-999"})
+	err := s.AddAccount(model.Account{ID: "acc-new", ClientID: "cl-999"})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("got error %v, want ErrNotFound", err)
 	}
@@ -194,7 +196,7 @@ func TestAddAccountUnknownClient(t *testing.T) {
 
 func TestAddAccountDuplicate(t *testing.T) {
 	s := newSeededStore(t)
-	err := s.AddAccount(Account{ID: "acc-001", ClientID: "cl-002"})
+	err := s.AddAccount(model.Account{ID: "acc-001", ClientID: "cl-002"})
 	if !errors.Is(err, ErrAlreadyExists) {
 		t.Fatalf("got error %v, want ErrAlreadyExists", err)
 	}
@@ -205,7 +207,7 @@ func TestAddAccountDuplicate(t *testing.T) {
 
 func TestAddAccountUpdatesIndex(t *testing.T) {
 	s := newStoreWithAccount(t, 0)
-	if err := s.AddAccount(Account{ID: "acc-2", ClientID: "cl-1"}); err != nil {
+	if err := s.AddAccount(model.Account{ID: "acc-2", ClientID: "cl-1"}); err != nil {
 		t.Fatal(err)
 	}
 	accounts := s.GetAccountsByClient("cl-1")
@@ -222,24 +224,24 @@ func TestAddAccountUpdatesIndex(t *testing.T) {
 func TestAddTransactionChangesBalance(t *testing.T) {
 	tests := []struct {
 		name      string
-		direction CreditDebit
+		direction model.CreditDebit
 		amount    int64
 		want      int64
 	}{
-		{name: "credit", direction: Credit, amount: 10_000, want: 110_000},
-		{name: "debit", direction: Debit, amount: 10_000, want: 90_000},
-		{name: "debit below zero", direction: Debit, amount: 150_000, want: -50_000},
+		{name: "credit", direction: model.Credit, amount: 10_000, want: 110_000},
+		{name: "debit", direction: model.Debit, amount: 10_000, want: 90_000},
+		{name: "debit below zero", direction: model.Debit, amount: 150_000, want: -50_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := newStoreWithAccount(t, 100_000) // 1 000 ₽
 
-			err := s.AddTransaction(Transaction{
+			err := s.AddTransaction(model.Transaction{
 				ID:        "tx-1",
 				AccountID: "acc-1",
 				AmountKop: tt.amount,
 				Direction: tt.direction,
-				Status:    TransactionBooked,
+				Status:    model.TransactionBooked,
 				BookedAt:  time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC),
 			})
 			if err != nil {
@@ -258,25 +260,25 @@ func TestAddTransactionChangesBalance(t *testing.T) {
 }
 
 func TestAddTransactionInvalid(t *testing.T) {
-	valid := Transaction{
+	valid := model.Transaction{
 		ID:        "tx-1",
 		AccountID: "acc-1",
 		AmountKop: 10_000,
-		Direction: Debit,
-		Status:    TransactionBooked,
+		Direction: model.Debit,
+		Status:    model.TransactionBooked,
 		BookedAt:  time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC),
 	}
 
 	tests := []struct {
 		name    string
-		modify  func(tx *Transaction)
+		modify  func(tx *model.Transaction)
 		wantErr error
 	}{
-		{name: "unknown account", modify: func(tx *Transaction) { tx.AccountID = "acc-999" }, wantErr: ErrNotFound},
-		{name: "zero amount", modify: func(tx *Transaction) { tx.AmountKop = 0 }},
-		{name: "negative amount", modify: func(tx *Transaction) { tx.AmountKop = -100 }},
-		{name: "unknown direction", modify: func(tx *Transaction) { tx.Direction = "Debet" }},
-		{name: "empty direction", modify: func(tx *Transaction) { tx.Direction = "" }},
+		{name: "unknown account", modify: func(tx *model.Transaction) { tx.AccountID = "acc-999" }, wantErr: ErrNotFound},
+		{name: "zero amount", modify: func(tx *model.Transaction) { tx.AmountKop = 0 }},
+		{name: "negative amount", modify: func(tx *model.Transaction) { tx.AmountKop = -100 }},
+		{name: "unknown direction", modify: func(tx *model.Transaction) { tx.Direction = "Debet" }},
+		{name: "empty direction", modify: func(tx *model.Transaction) { tx.Direction = "" }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -310,12 +312,12 @@ func TestConcurrentAddTransaction(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			err := s.AddTransaction(Transaction{
+			err := s.AddTransaction(model.Transaction{
 				ID:        fmt.Sprintf("tx-%d", i),
 				AccountID: "acc-1",
 				AmountKop: 1,
-				Direction: Credit,
-				Status:    TransactionBooked,
+				Direction: model.Credit,
+				Status:    model.TransactionBooked,
 				BookedAt:  time.Date(2026, 11, 20, 12, 0, i, 0, time.UTC),
 			})
 			if err != nil {
