@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
-	
+
 	"github.com/2inxs/openbanking-service/pkg/logger"
 )
 
