@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
-
+	
 	"github.com/2inxs/openbanking-service/pkg/logger"
 )
 
@@ -18,10 +18,19 @@ type errorResponse struct {
 
 // Recover перехватывает паники в нижележащих хендлерах, пишет стек в лог
 // и возвращает клиенту безопасный ответ 500 Internal Server Error.
-// В цепочке должен стоять между RequestID и Logging.
+// В цепочке должен стоять после RequestID и Logging.
 func Recover(log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Если выше в цепочке нет Logging middleware, оборачиваем ResponseWriter сами,
+			// чтобы всё равно отслеживать факт отправки заголовков.
+			if _, ok := findHeaderTracker(w); !ok {
+				w = &responseWriter{
+					ResponseWriter: w,
+					status:         http.StatusOK,
+				}
+			}
+
 			defer func() {
 				rec := recover()
 				if rec == nil {
@@ -44,8 +53,12 @@ func Recover(log *slog.Logger) func(http.Handler) http.Handler {
 					slog.String("path", r.URL.Path),
 				)
 
-				// Если заголовки уже ушли клиенту, мы можем только закрыть/оборвать ответ,
-				// иначе пишем стандартный JSON 500.
+				// Если заголовки уже ушли клиенту, менять статус и дописывать JSON нельзя —
+				// сигнализируем net/http о необходимости принудительно оборвать ответ.
+				if tracker, ok := findHeaderTracker(w); ok && tracker.HeaderWritten() {
+					panic(http.ErrAbortHandler)
+				}
+
 				w.Header().Set("Content-Type", "application/json; charset=utf-8")
 				if reqID != "" {
 					w.Header().Set(HeaderRequestID, reqID)
@@ -61,4 +74,18 @@ func Recover(log *slog.Logger) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func findHeaderTracker(w http.ResponseWriter) (headerWrittenTracker, bool) {
+	for w != nil {
+		if t, ok := w.(headerWrittenTracker); ok {
+			return t, true
+		}
+		u, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			break
+		}
+		w = u.Unwrap()
+	}
+	return nil, false
 }

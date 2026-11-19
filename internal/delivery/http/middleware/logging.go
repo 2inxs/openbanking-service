@@ -7,6 +7,10 @@ import (
 	"time"
 )
 
+type headerWrittenTracker interface {
+	HeaderWritten() bool
+}
+
 // responseWriter оборачивает http.ResponseWriter для захвата кода статуса и размера ответа.
 type responseWriter struct {
 	http.ResponseWriter
@@ -16,6 +20,11 @@ type responseWriter struct {
 }
 
 func (rw *responseWriter) WriteHeader(code int) {
+	// Промежуточные 1xx-ответы (например, 103 Early Hints) не завершают заголовки ответа.
+	if code >= 100 && code < 200 {
+		rw.ResponseWriter.WriteHeader(code)
+		return
+	}
 	if rw.wroteHeader {
 		return
 	}
@@ -31,6 +40,10 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	n, err := rw.ResponseWriter.Write(b)
 	rw.bytes += n
 	return n, err
+}
+
+func (rw *responseWriter) HeaderWritten() bool {
+	return rw.wroteHeader
 }
 
 // Unwrap позволяет стандартным хелперам (например, http.ResponseController) добраться до исходного ResponseWriter.
