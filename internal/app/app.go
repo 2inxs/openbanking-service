@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/2inxs/openbanking-service/internal/config"
+	"github.com/2inxs/openbanking-service/internal/delivery/http/middleware"
 )
 
 // App owns an HTTP server. Create a new App for each run.
@@ -22,14 +23,26 @@ type App struct {
 
 // New builds the API. Business routes will be added by the HTTP delivery layer.
 func New(cfg config.Config, logger *slog.Logger) *App {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	mux := http.NewServeMux()
+	handler := middleware.RequestID(
+		middleware.Logging(logger)(
+			middleware.Recover(logger)(mux),
+		),
+	)
+
 	return &App{
 		server: &http.Server{
 			Addr:              cfg.HTTPAddr,
-			Handler:           http.NewServeMux(),
+			Handler:           handler,
 			ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout,
 			ReadTimeout:       cfg.HTTPReadTimeout,
 			WriteTimeout:      cfg.HTTPWriteTimeout,
 			IdleTimeout:       cfg.HTTPIdleTimeout,
+			MaxHeaderBytes:    1 << 20, // 1 MB
 			ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelError),
 		},
 		shutdownTimeout: cfg.ShutdownTimeout,

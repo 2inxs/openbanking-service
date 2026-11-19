@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -10,22 +9,33 @@ import (
 
 	"github.com/2inxs/openbanking-service/internal/app"
 	"github.com/2inxs/openbanking-service/internal/config"
+	"github.com/2inxs/openbanking-service/pkg/logger"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	if err := run(logger); err != nil {
-		logger.Error("API stopped with an error", "error", err)
+	bootstrapLog := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	cfg, err := config.Load()
+	if err != nil {
+		bootstrapLog.Error("load configuration", "error", err)
+		os.Exit(1)
+	}
+
+	log, err := logger.New(cfg.LogLevel, os.Stderr)
+	if err != nil {
+		bootstrapLog.Error("initialize logger", "error", err)
+		os.Exit(1)
+	}
+	slog.SetDefault(log)
+
+	if err := run(cfg, log); err != nil {
+		log.Error("API stopped with an error", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(logger *slog.Logger) error {
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("load configuration: %w", err)
-	}
+func run(cfg config.Config, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return app.New(cfg, logger).Run(ctx)
+	return app.New(cfg, log).Run(ctx)
 }
