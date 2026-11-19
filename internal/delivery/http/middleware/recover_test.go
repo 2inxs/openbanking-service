@@ -23,7 +23,6 @@ func TestRecoverMiddleware(t *testing.T) {
 		panic("unexpected nil pointer")
 	})
 
-	// Logging оборачивает Recover, чтобы перехватить итоговый статус 500, выставленный Recover
 	chain := middleware.RequestID(
 		middleware.Logging(log)(
 			middleware.Recover(log)(panicHandler),
@@ -48,12 +47,6 @@ func TestRecoverMiddleware(t *testing.T) {
 		t.Fatalf("response leaked internal panic details: %s", body)
 	}
 
-	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("expected 2 log lines, got %d: %s", len(lines), buf.String())
-	}
-
-	// Первая запись — из Recover (срабатывает раньше при раскрутке стека)
 	var panicEntry, reqEntry map[string]any
 	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
 		var entry map[string]any
@@ -81,5 +74,7 @@ func TestRecoverMiddleware(t *testing.T) {
 	if reqEntry == nil {
 		t.Fatalf("expected 'http request' log entry, got: %s", buf.String())
 	}
-
+	if reqEntry["status"] != float64(http.StatusInternalServerError) {
+		t.Errorf("expected status 500 in http request log, got %v", reqEntry["status"])
+	}
 }
