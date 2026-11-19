@@ -49,8 +49,11 @@ func (rw *responseWriter) HeaderWritten() bool {
 }
 
 // Unwrap позволяет стандартным хелперам (например, http.ResponseController) добраться до исходного ResponseWriter.
-func (rw *responseWriter) Unwrap() http.ResponseWriter {
-	return rw.ResponseWriter
+func (rw *responseWriter) Flush() {
+	if !rw.wroteHeader {
+		rw.WriteHeader(http.StatusOK)
+	}
+	_ = http.NewResponseController(rw.ResponseWriter).Flush()
 }
 
 // Logging логирует метаданные каждого HTTP-запроса.

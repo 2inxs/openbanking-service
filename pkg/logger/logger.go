@@ -7,6 +7,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"time"
 )
 
 const redactedValue = "[REDACTED]"
@@ -95,8 +96,11 @@ func sanitizeScalar(a slog.Attr) slog.Attr {
 }
 
 func sanitizeAny(v any, depth int) any {
-	if v == nil || depth > 8 {
-		return v
+	if v == nil {
+		return nil
+	}
+	if depth > 8 {
+		return "[REDACTED]"
 	}
 
 	if err, ok := v.(error); ok {
@@ -134,7 +138,7 @@ func sanitizeAny(v any, depth int) any {
 
 	case reflect.Struct:
 		// fmt.Stringer (например, time.Time) оставляем как есть
-		if _, ok := v.(fmt.Stringer); ok {
+		if _, ok := v.(time.Time); ok {
 			return v
 		}
 		rt := rv.Type()
