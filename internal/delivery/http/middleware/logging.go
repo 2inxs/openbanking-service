@@ -56,6 +56,10 @@ func (rw *responseWriter) Flush() {
 	_ = http.NewResponseController(rw.ResponseWriter).Flush()
 }
 
+func (rw *responseWriter) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
+}
+
 // Logging логирует метаданные каждого HTTP-запроса.
 // В цепочке стоит после RequestID и перед Recover (RequestID -> Logging -> Recover),
 // чтобы перехватывать итоговый статус 500, выставленный при панике.
