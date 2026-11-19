@@ -5,6 +5,8 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"github.com/2inxs/openbanking-service/pkg/logger"
 )
 
 type headerWrittenTracker interface {
@@ -58,6 +60,12 @@ func Logging(log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
+
+			// Инициализируем состояние запроса, чтобы внутренние middleware (Auth)
+			// могли записать userID для финального access-лога.
+			ctx, reqState := logger.WithRequestState(r.Context())
+			r = r.WithContext(ctx)
+
 			rw := &responseWriter{
 				ResponseWriter: w,
 				status:         http.StatusOK,
@@ -66,6 +74,13 @@ func Logging(log *slog.Logger) func(http.Handler) http.Handler {
 			defer func() {
 				duration := time.Since(start)
 				path := r.URL.Path
+
+				logCtx := r.Context()
+				if uid := reqState.UserID(); uid != "" {
+					logCtx = logger.WithFields(logCtx, func(f *logger.ContextFields) {
+						f.UserID = uid
+					})
+				}
 
 				level := slog.LevelInfo
 				switch {
@@ -77,7 +92,7 @@ func Logging(log *slog.Logger) func(http.Handler) http.Handler {
 					level = slog.LevelDebug
 				}
 
-				log.LogAttrs(r.Context(), level, "http request",
+				log.LogAttrs(logCtx, level, "http request",
 					slog.String("method", r.Method),
 					slog.String("path", path),
 					slog.Int("status", rw.status),
