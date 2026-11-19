@@ -26,9 +26,13 @@ func WithFields(ctx context.Context, fn func(*ContextFields)) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	current := FieldsFromContext(ctx)
-	fn(&current)
-	return context.WithValue(ctx, fieldsKey, current)
+	if existing, ok := ctx.Value(fieldsKey).(*ContextFields); ok && existing != nil {
+		fn(existing)
+		return ctx
+	}
+	fields := &ContextFields{}
+	fn(fields)
+	return context.WithValue(ctx, fieldsKey, fields)
 }
 
 // FieldsFromContext извлекает метаданные из контекста.
@@ -36,8 +40,8 @@ func FieldsFromContext(ctx context.Context) ContextFields {
 	if ctx == nil {
 		return ContextFields{}
 	}
-	if f, ok := ctx.Value(fieldsKey).(ContextFields); ok {
-		return f
+	if f, ok := ctx.Value(fieldsKey).(*ContextFields); ok && f != nil {
+		return *f
 	}
 	return ContextFields{}
 }
