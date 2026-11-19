@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Go checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false # Enable caching once the project has dependencies and go.sum.
+
+      - name: Check formatting
+        shell: bash
+        run: |
+          unformatted=$(git ls-files -z '*.go' | xargs -0 -r gofmt -l)
+          if [ -n "$unformatted" ]; then
+            echo "Run gofmt on the following files:"
+            printf '%s\n' "$unformatted"
+            exit 1
+          fi
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race -count=1 -timeout=2m ./...
