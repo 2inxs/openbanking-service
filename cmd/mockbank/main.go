@@ -15,6 +15,11 @@ func main() {
 		addr = "127.0.0.1:8081"
 	}
 
+	store := mockbank.NewStore()
+	if err := mockbank.SeedDemoData(store); err != nil {
+		log.Fatal(err)
+	}
+
 	serv := &http.Server{
 		Addr:              addr,
 		Handler:           mockbank.NewHandler(),
