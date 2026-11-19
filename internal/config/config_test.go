@@ -11,6 +11,7 @@ func clearSettings(t *testing.T) {
 	for _, name := range []string{
 		"HTTP_ADDR", "HTTP_READ_HEADER_TIMEOUT", "HTTP_READ_TIMEOUT",
 		"HTTP_WRITE_TIMEOUT", "HTTP_IDLE_TIMEOUT", "SHUTDOWN_TIMEOUT",
+		"LOG_LEVEL",
 	} {
 		t.Setenv(name, "")
 	}
@@ -22,7 +23,7 @@ func TestLoadDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.HTTPAddr != "127.0.0.1:8080" || cfg.ShutdownTimeout != 10*time.Second {
+	if cfg.HTTPAddr != "127.0.0.1:8080" || cfg.ShutdownTimeout != 10*time.Second || cfg.LogLevel != "info" {
 		t.Fatalf("unexpected defaults: %+v", cfg)
 	}
 	if cfg.HTTPReadHeaderTimeout <= 0 || cfg.HTTPReadTimeout <= 0 || cfg.HTTPWriteTimeout <= 0 || cfg.HTTPIdleTimeout <= 0 {
@@ -39,6 +40,7 @@ func TestLoadOverrides(t *testing.T) {
 		"HTTP_WRITE_TIMEOUT":       "40s",
 		"HTTP_IDLE_TIMEOUT":        "2m",
 		"SHUTDOWN_TIMEOUT":         "3s",
+		"LOG_LEVEL":                "debug",
 	} {
 		t.Setenv(name, value)
 	}
@@ -53,6 +55,7 @@ func TestLoadOverrides(t *testing.T) {
 		HTTPWriteTimeout:      40 * time.Second,
 		HTTPIdleTimeout:       2 * time.Minute,
 		ShutdownTimeout:       3 * time.Second,
+		LogLevel:              "debug",
 	}
 	if cfg != want {
 		t.Fatalf("Load() = %+v, want %+v", cfg, want)
@@ -87,5 +90,18 @@ func TestLoadRejectsInvalidTimeouts(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestLoadRejectsInvalidLogLevel(t *testing.T) {
+	for _, level := range []string{"trace", "verbose", "123"} {
+		t.Run(level, func(t *testing.T) {
+			clearSettings(t)
+			t.Setenv("LOG_LEVEL", level)
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), "LOG_LEVEL") {
+				t.Fatalf("expected LOG_LEVEL error, got %v", err)
+			}
+		})
 	}
 }
