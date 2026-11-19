@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"reflect"
 	"strings"
 )
 
@@ -46,38 +47,134 @@ func parseLevel(s string) (slog.Level, error) {
 	}
 }
 
-func replaceAttr(_ []string, a slog.Attr) slog.Attr {
-	// Рекурсивно обрабатываем вложенные группы атрибутов
+func replaceAttr(groups []string, a slog.Attr) slog.Attr {
+	// Если любая из родительских групп является секретной (например, slog.Group("access_token", ...)),
+	// скрываем все атрибуты внутри неё.
+	for _, g := range groups {
+		gk := strings.ToLower(strings.TrimSpace(g))
+		if isSecretKey(gk) || isAmountKey(gk) {
+			return slog.String(a.Key, redactedValue)
+		}
+	}
+
 	if a.Value.Kind() == slog.KindGroup {
 		attrs := a.Value.Group()
+		nextGroups := append(append([]string(nil), groups...), a.Key)
 		sanitized := make([]slog.Attr, len(attrs))
 		for i, ga := range attrs {
-			sanitized[i] = replaceAttr(nil, ga)
+			sanitized[i] = replaceAttr(nextGroups, ga)
 		}
 		return slog.Group(a.Key, anySlice(sanitized)...)
 	}
 
+	// Обрабатываем сложные объекты (map, slice, struct), переданные через slog.Any
+	if a.Value.Kind() == slog.KindAny {
+		key := strings.ToLower(strings.TrimSpace(a.Key))
+		if isSecretKey(key) || isAmountKey(key) {
+			return slog.String(a.Key, redactedValue)
+		}
+		return slog.Any(a.Key, sanitizeAny(a.Value.Any(), 0))
+	}
+
+	return sanitizeScalar(a)
+}
+
+func sanitizeScalar(a slog.Attr) slog.Attr {
 	key := strings.ToLower(strings.TrimSpace(a.Key))
 
 	switch {
-	// 1. Полное скрытие секретов, токенов, паролей и заголовков авторизации
-	case isSecretKey(key):
+	case isSecretKey(key) || isAmountKey(key):
 		return slog.String(a.Key, redactedValue)
-
-	// 2. По требованиям раздела 14.5 суммы операций не попадают в техлог
-	case key == "amount" || key == "amount_kop" || key == "balance" || key == "balance_kop":
-		return slog.String(a.Key, redactedValue)
-
-	// 3. Маскирование email (оставляем первый символ и домен)
 	case key == "email" || strings.HasSuffix(key, "_email"):
 		return slog.String(a.Key, maskEmail(a.Value.String()))
-
-	// 4. Маскирование номеров карт и счетов (оставляем только последние 4 цифры)
 	case isCardOrAccountKey(key):
 		return slog.String(a.Key, maskLast4(a.Value.String()))
+	default:
+		return a
+	}
+}
+
+func sanitizeAny(v any, depth int) any {
+	if v == nil || depth > 8 {
+		return v
 	}
 
-	return a
+	if err, ok := v.(error); ok {
+		return err.Error()
+	}
+
+	rv := reflect.ValueOf(v)
+	for rv.Kind() == reflect.Pointer {
+		if rv.IsNil() {
+			return nil
+		}
+		rv = rv.Elem()
+	}
+
+	switch rv.Kind() {
+	case reflect.Map:
+		res := make(map[string]any, rv.Len())
+		iter := rv.MapRange()
+		for iter.Next() {
+			kStr := fmt.Sprint(iter.Key().Interface())
+			res[kStr] = sanitizeFieldValue(kStr, iter.Value().Interface(), depth+1)
+		}
+		return res
+
+	case reflect.Slice, reflect.Array:
+		// []byte не трогаем
+		if rv.Type().Elem().Kind() == reflect.Uint8 {
+			return v
+		}
+		res := make([]any, rv.Len())
+		for i := 0; i < rv.Len(); i++ {
+			res[i] = sanitizeAny(rv.Index(i).Interface(), depth+1)
+		}
+		return res
+
+	case reflect.Struct:
+		// fmt.Stringer (например, time.Time) оставляем как есть
+		if _, ok := v.(fmt.Stringer); ok {
+			return v
+		}
+		rt := rv.Type()
+		res := make(map[string]any, rt.NumField())
+		for i := 0; i < rt.NumField(); i++ {
+			field := rt.Field(i)
+			if !field.IsExported() {
+				continue
+			}
+			name := field.Name
+			if tag := field.Tag.Get("json"); tag != "" {
+				parts := strings.Split(tag, ",")
+				if parts[0] == "-" {
+					continue
+				}
+				if parts[0] != "" {
+					name = parts[0]
+				}
+			}
+			res[name] = sanitizeFieldValue(name, rv.Field(i).Interface(), depth+1)
+		}
+		return res
+
+	default:
+		return v
+	}
+}
+
+func sanitizeFieldValue(key string, val any, depth int) any {
+	k := strings.ToLower(strings.TrimSpace(key))
+	switch {
+	case isSecretKey(k) || isAmountKey(k):
+		return redactedValue
+	case k == "email" || strings.HasSuffix(k, "_email"):
+		return maskEmail(fmt.Sprint(val))
+	case isCardOrAccountKey(k):
+		return maskLast4(fmt.Sprint(val))
+	default:
+		return sanitizeAny(val, depth)
+	}
 }
 
 func isSecretKey(key string) bool {
@@ -102,6 +199,15 @@ func isSecretKey(key string) bool {
 	return false
 }
 
+func isAmountKey(key string) bool {
+	switch key {
+	case "amount", "amount_kop", "balance", "balance_kop":
+		return true
+	default:
+		return false
+	}
+}
+
 func isCardOrAccountKey(key string) bool {
 	switch key {
 	case "pan", "card_number", "card", "account_number", "account":
@@ -121,11 +227,10 @@ func maskEmail(email string) string {
 		return redactedValue
 	}
 	runes := []rune(email[:at])
-	return string(runes[0]) + "***" + email[at:]
+	return string(runes[:1]) + "***" + email[at:]
 }
 
 func maskLast4(val string) string {
-	// Убираем пробелы и дефисы, чтобы корректно взять последние 4 цифры
 	cleaned := strings.NewReplacer(" ", "", "-", "").Replace(strings.TrimSpace(val))
 	if cleaned == "" {
 		return ""

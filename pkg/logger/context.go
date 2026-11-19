@@ -10,56 +10,80 @@ type ctxKey int
 
 const (
 	fieldsKey ctxKey = iota + 1
+	reqStateKey
 )
 
-// ContextFields содержит корреляционные метаданные запроса или фоновой задачи.
+// ContextFields содержит неизменяемые корреляционные метаданные.
 type ContextFields struct {
 	RequestID     string
 	TraceID       string
 	UserID        string
 	Job           string
 	BankID        string
-	InteractionID string // x-fapi-interaction-id для запросов к банкам
+	InteractionID string
 }
 
-// contextHolder защищает общие метаданные запроса от гонок данных,
-// если внутри хендлера запускаются дочерние горутины с тем же ctx.
-type contextHolder struct {
-	mu     sync.RWMutex
-	fields ContextFields
-}
-
-// WithFields добавляет или обновляет поля логирования в контексте.
+// WithFields создаёт копию метаданных родительского контекста, применяет fn
+// и возвращает новый context.Context, не затрагивая родительский.
 func WithFields(ctx context.Context, fn func(*ContextFields)) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if holder, ok := ctx.Value(fieldsKey).(*contextHolder); ok && holder != nil {
-		holder.mu.Lock()
-		fn(&holder.fields)
-		holder.mu.Unlock()
-		return ctx
-	}
-
-	holder := &contextHolder{}
-	fn(&holder.fields)
-	return context.WithValue(ctx, fieldsKey, holder)
+	fields := FieldsFromContext(ctx)
+	fn(&fields)
+	return context.WithValue(ctx, fieldsKey, fields)
 }
 
-// FieldsFromContext потокобезопасно возвращает снимок метаданных из контекста.
+// FieldsFromContext возвращает метаданные из контекста.
 func FieldsFromContext(ctx context.Context) ContextFields {
 	if ctx == nil {
 		return ContextFields{}
 	}
-	if holder, ok := ctx.Value(fieldsKey).(*contextHolder); ok && holder != nil {
-		holder.mu.RLock()
-		defer holder.mu.RUnlock()
-		return holder.fields
+	if f, ok := ctx.Value(fieldsKey).(ContextFields); ok {
+		return f
 	}
 	return ContextFields{}
 }
 
-// contextHandler оборачивает базовый slog.Handler и автоматически добавляет поля из ctx.
+// RequestState хранит данные уровня одного HTTP-запроса, которые устанавливаются
+// внутренними middleware (например, Auth) и читаются внешним Logging middleware.
+type RequestState struct {
+	mu     sync.RWMutex
+	userID string
+}
+
+// WithRequestState привязывает состояние HTTP-запроса к контексту.
+func WithRequestState(ctx context.Context) (context.Context, *RequestState) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	st := &RequestState{}
+	return context.WithValue(ctx, reqStateKey, st), st
+}
+
+// SetRequestUserID фиксирует ID аутентифицированного пользователя для access-лога
+// и возвращает новый контекст с обновлённым UserID для нижележащих слоёв.
+func SetRequestUserID(ctx context.Context, userID string) context.Context {
+	if st, ok := ctx.Value(reqStateKey).(*RequestState); ok && st != nil {
+		st.mu.Lock()
+		st.userID = userID
+		st.mu.Unlock()
+	}
+	return WithFields(ctx, func(f *ContextFields) {
+		f.UserID = userID
+	})
+}
+
+// UserID потокобезопасно возвращает идентификатор пользователя, установленный в рамках запроса.
+func (s *RequestState) UserID() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.userID
+}
+
 type contextHandler struct {
 	next slog.Handler
 }
