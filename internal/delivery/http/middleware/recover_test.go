@@ -24,8 +24,8 @@ func TestRecoverMiddleware(t *testing.T) {
 	})
 
 	chain := middleware.RequestID(
-		middleware.Recover(log)(
-			middleware.Logging(log)(panicHandler),
+		middleware.Logging(log)(
+			middleware.Recover(log)(panicHandler),
 		),
 	)
 
