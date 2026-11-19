@@ -18,6 +18,7 @@ type Config struct {
 	HTTPWriteTimeout      time.Duration
 	HTTPIdleTimeout       time.Duration
 	ShutdownTimeout       time.Duration
+	LogLevel              string
 }
 
 // Load reads environment variables. Unset or empty variables use defaults.
@@ -30,6 +31,7 @@ func Load() (Config, error) {
 		HTTPWriteTimeout:      30 * time.Second,
 		HTTPIdleTimeout:       60 * time.Second,
 		ShutdownTimeout:       10 * time.Second,
+		LogLevel:              "info",
 	}
 	if value := os.Getenv("HTTP_ADDR"); value != "" {
 		cfg.HTTPAddr = value
@@ -41,6 +43,16 @@ func Load() (Config, error) {
 	portNumber, err := strconv.Atoi(port)
 	if err != nil || portNumber < 1 || portNumber > 65535 || strings.ContainsAny(cfg.HTTPAddr, " \t\r\n") {
 		return Config{}, fmt.Errorf("HTTP_ADDR must contain a numeric port between 1 and 65535 and no whitespace")
+	}
+
+	if value := strings.TrimSpace(os.Getenv("LOG_LEVEL")); value != "" {
+		normalized := strings.ToLower(value)
+		switch normalized {
+		case "debug", "info", "warn", "error":
+			cfg.LogLevel = normalized
+		default:
+			return Config{}, fmt.Errorf("LOG_LEVEL must be one of debug, info, warn, error")
+		}
 	}
 
 	for _, setting := range []struct {
