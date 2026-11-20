@@ -108,10 +108,10 @@ func (r *AuditRepo) writeTechLog(ctx context.Context, ctxFields logger.ContextFi
 		slog.String("status", string(event.Status)),
 	}
 
-	if event.UserID != "" && ctxFields.UserID == "" {
+	if event.UserID != "" {
 		attrs = append(attrs, slog.String("user_id", event.UserID))
 	}
-	if event.RequestID != "" && ctxFields.RequestID == "" {
+	if event.RequestID != "" {
 		attrs = append(attrs, slog.String("request_id", event.RequestID))
 	}
 	if event.ResourceID != "" {
