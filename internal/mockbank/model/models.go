@@ -45,7 +45,7 @@ type Account struct {
 	Status      AccountStatus
 	Description string
 	BalanceKop  int64
-	Card        Card
+	Card        *Card
 	OpenedAt    time.Time
 }
 
