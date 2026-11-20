@@ -10,10 +10,10 @@ const (
 )
 
 type ErrorResponse struct {
-	Code    string `json:"code"`
-	Id      string `json:"id"`
-	Message string `json:"message"`
-	Errors  []ErrorItem
+	Code    string      `json:"code"`
+	Id      string      `json:"id"`
+	Message string      `json:"message"`
+	Errors  []ErrorItem `json:"errors"`
 }
 
 type ErrorItem struct {

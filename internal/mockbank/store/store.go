@@ -1,9 +1,11 @@
 package store
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/2inxs/openbanking-service/internal/mockbank/model"
@@ -72,7 +74,10 @@ func (s *Store) GetTransactionsByAccount(accountID string) ([]model.Transaction,
 	}
 	txs := slices.Clone(s.transactionsByAccount[accountID])
 	slices.SortFunc(txs, func(a, b model.Transaction) int {
-		return b.BookedAt.Compare(a.BookedAt)
+		return cmp.Or(
+			b.BookedAt.Compare(a.BookedAt),
+			strings.Compare(b.ID, a.ID),
+		)
 	})
 	return txs, nil
 }
