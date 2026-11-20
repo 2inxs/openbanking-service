@@ -7,37 +7,17 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/2inxs/openbanking-service/internal/domain"
-	"github.com/2inxs/openbanking-service/internal/usecase"
 	"github.com/2inxs/openbanking-service/pkg/logger"
 )
-
-const redactedValue = "[REDACTED]"
 
 var (
 	ErrAuditUserIDMismatch    = errors.New("audit: event user_id does not match context user_id")
 	ErrAuditRequestIDMismatch = errors.New("audit: event request_id does not match context request_id")
 )
-
-var sensitiveMetadataTokens = []string{
-	"password",
-	"passwd",
-	"secret",
-	"token",
-	"authorization",
-	"api_key",
-	"apikey",
-	"credential",
-	"private_key",
-	"card_number",
-	"pan",
-	"cvv",
-	"cvc",
-}
 
 // AuditRepo реализует usecase.AuditLogger в памяти (append-only)
 // и при наличии *slog.Logger проксирует аудит-события в техлоггер.
@@ -59,7 +39,7 @@ func NewAuditRepoWithLogger(log *slog.Logger) *AuditRepo {
 }
 
 func (r *AuditRepo) Log(ctx context.Context, event domain.AuditEvent) error {
-	if err := usecase.ValidateAuditEvent(event); err != nil {
+	if err := event.Validate(); err != nil {
 		return err
 	}
 
@@ -78,14 +58,20 @@ func (r *AuditRepo) Log(ctx context.Context, event domain.AuditEvent) error {
 	event.RequestID = requestID
 
 	if event.ID == "" {
-		event.ID = newEventID()
+		id, err := newEventID()
+		if err != nil {
+			return err
+		}
+		event.ID = id
 	}
 	if event.OccurredAt.IsZero() {
 		event.OccurredAt = time.Now().UTC()
+	} else {
+		event.OccurredAt = event.OccurredAt.UTC()
 	}
 
-	// Защитная копия с маскированием секретов до сохранения в память (работает и без техлоггера)
-	event.Metadata = sanitizeMetadata(event.Metadata)
+	// Защитная копия с едиными правилами маскирования (секреты, суммы, email, PAN).
+	event.Metadata = logger.SanitizeStringMap(event.Metadata)
 
 	r.mu.Lock()
 	r.events = append(r.events, event)
@@ -122,14 +108,12 @@ func (r *AuditRepo) writeTechLog(ctx context.Context, ctxFields logger.ContextFi
 		slog.String("status", string(event.Status)),
 	}
 
-	// Добавляем user_id и request_id только если их нет в ctx (иначе их запишет contextHandler без дублей)
 	if event.UserID != "" && ctxFields.UserID == "" {
 		attrs = append(attrs, slog.String("user_id", event.UserID))
 	}
 	if event.RequestID != "" && ctxFields.RequestID == "" {
 		attrs = append(attrs, slog.String("request_id", event.RequestID))
 	}
-
 	if event.ResourceID != "" {
 		attrs = append(attrs, slog.String("resource_id", event.ResourceID))
 	}
@@ -143,14 +127,14 @@ func (r *AuditRepo) writeTechLog(ctx context.Context, ctxFields logger.ContextFi
 		attrs = append(attrs, slog.Any("metadata", event.Metadata))
 	}
 
-	if event.Status == domain.AuditStatusFailure {
+	if event.Status == domain.AuditStatusFailure || event.Action == domain.AuditActionTokenReuseDetected {
 		r.log.WarnContext(ctx, "audit event", attrs...)
 		return
 	}
 	r.log.InfoContext(ctx, "audit event", attrs...)
 }
 
-// ListByUser возвращает глубокую копию событий пользователя (удобно для контрактных и интеграционных тестов).
+// ListByUser возвращает глубокую копию событий пользователя в UTC.
 func (r *AuditRepo) ListByUser(userID string) []domain.AuditEvent {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -166,31 +150,6 @@ func (r *AuditRepo) ListByUser(userID string) []domain.AuditEvent {
 	return res
 }
 
-func sanitizeMetadata(src map[string]string) map[string]string {
-	if src == nil {
-		return nil
-	}
-	dst := make(map[string]string, len(src))
-	for k, v := range src {
-		if isSensitiveKey(k) {
-			dst[k] = redactedValue
-			continue
-		}
-		dst[k] = v
-	}
-	return dst
-}
-
-func isSensitiveKey(key string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(key))
-	for _, token := range sensitiveMetadataTokens {
-		if strings.Contains(normalized, token) {
-			return true
-		}
-	}
-	return false
-}
-
 func cloneMetadata(src map[string]string) map[string]string {
 	if src == nil {
 		return nil
@@ -202,10 +161,10 @@ func cloneMetadata(src map[string]string) map[string]string {
 	return dst
 }
 
-func newEventID() string {
+func newEventID() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("audit-fallback-%d", time.Now().UnixNano())
+		return "", fmt.Errorf("audit: generate event id: %w", err)
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }

@@ -1,6 +1,10 @@
 package domain
 
-import "time"
+import (
+	"errors"
+	"strings"
+	"time"
+)
 
 // AuditAction определяет тип значимого бизнес- или безопасного события.
 type AuditAction string
@@ -30,10 +34,17 @@ const (
 	AuditStatusFailure AuditStatus = "failure"
 )
 
+var (
+	ErrAuditActionRequired = errors.New("audit: action is required")
+	ErrAuditActionInvalid  = errors.New("audit: action format is invalid")
+	ErrAuditStatusRequired = errors.New("audit: status is required")
+	ErrAuditStatusInvalid  = errors.New("audit: status must be success or failure")
+)
+
 // AuditEvent представляет неизменяемую запись в журнале аудита (append-only).
 type AuditEvent struct {
 	ID         string
-	OccurredAt time.Time // В БД заполняется через now(); для memory заполняется при записи
+	OccurredAt time.Time // В БД заполняется через now() в UTC; для memory заполняется при записи
 	UserID     string    // Может быть пустым (например, при неудачной попытке входа)
 	Action     AuditAction
 	Status     AuditStatus
@@ -42,4 +53,22 @@ type AuditEvent struct {
 	RequestID  string
 	ResourceID string            // ID счёта, выписки, банковского подключения и т.д.
 	Metadata   map[string]string // Только безопасные метаданные (без паролей, токенов, PAN и сумм)
+}
+
+// Validate проверяет доменные инварианты события аудита.
+func (e AuditEvent) Validate() error {
+	action := strings.TrimSpace(string(e.Action))
+	if action == "" {
+		return ErrAuditActionRequired
+	}
+	if len(action) > 100 || strings.ContainsAny(action, " \t\r\n") {
+		return ErrAuditActionInvalid
+	}
+	if e.Status == "" {
+		return ErrAuditStatusRequired
+	}
+	if e.Status != AuditStatusSuccess && e.Status != AuditStatusFailure {
+		return ErrAuditStatusInvalid
+	}
+	return nil
 }
