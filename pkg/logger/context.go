@@ -94,24 +94,29 @@ func (h *contextHandler) Enabled(ctx context.Context, level slog.Level) bool {
 
 func (h *contextHandler) Handle(ctx context.Context, r slog.Record) error {
 	f := FieldsFromContext(ctx)
-	if f.RequestID != "" {
-		r.AddAttrs(slog.String("request_id", f.RequestID))
+	// Добавляем только непустые корреляционные поля, если они ещё не присутствуют в записи.
+	existing := make(map[string]struct{}, r.NumAttrs())
+	r.Attrs(func(a slog.Attr) bool {
+		existing[a.Key] = struct{}{}
+		return true
+	})
+
+	addIfMissing := func(key, val string) {
+		if val == "" {
+			return
+		}
+		if _, exists := existing[key]; !exists {
+			r.AddAttrs(slog.String(key, val))
+		}
 	}
-	if f.TraceID != "" {
-		r.AddAttrs(slog.String("trace_id", f.TraceID))
-	}
-	if f.UserID != "" {
-		r.AddAttrs(slog.String("user_id", f.UserID))
-	}
-	if f.Job != "" {
-		r.AddAttrs(slog.String("job", f.Job))
-	}
-	if f.BankID != "" {
-		r.AddAttrs(slog.String("bank_id", f.BankID))
-	}
-	if f.InteractionID != "" {
-		r.AddAttrs(slog.String("interaction_id", f.InteractionID))
-	}
+
+	addIfMissing("request_id", f.RequestID)
+	addIfMissing("trace_id", f.TraceID)
+	addIfMissing("user_id", f.UserID)
+	addIfMissing("job", f.Job)
+	addIfMissing("bank_id", f.BankID)
+	addIfMissing("interaction_id", f.InteractionID)
+
 	return h.next.Handle(ctx, r)
 }
 
