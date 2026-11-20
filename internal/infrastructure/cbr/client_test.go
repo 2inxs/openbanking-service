@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -12,62 +13,62 @@ import (
 	"github.com/2inxs/openbanking-service/internal/infrastructure/cbr"
 )
 
-// encodeWin1251 кодирует кириллицу и ASCII в байты Windows-1251 для имитации реального ответа ЦБ.
-func encodeWin1251(s string) []byte {
-	var out []byte
-	for _, r := range s {
-		switch {
-		case r < 0x80:
-			out = append(out, byte(r))
-		case r >= 0x0410 && r <= 0x044F:
-			out = append(out, byte(r-0x0410+0xC0))
-		case r == 0x0401:
-			out = append(out, 0xA8)
-		case r == 0x0451:
-			out = append(out, 0xB8)
-		default:
-			out = append(out, '?')
+const sampleJSON = `{
+	"Date": "2026-11-20T11:30:00+03:00",
+	"PreviousDate": "2026-11-19T11:30:00+03:00",
+	"Timestamp": "2026-11-20T20:00:00+03:00",
+	"Valute": {
+		"USD": {
+			"ID": "R01235",
+			"NumCode": "840",
+			"CharCode": "USD",
+			"Nominal": 1,
+			"Name": "Доллар США",
+			"Value": 91.4567,
+			"Previous": 91.1000
+		},
+		"KZT": {
+			"ID": "R01335",
+			"NumCode": "398",
+			"CharCode": "KZT",
+			"Nominal": 100,
+			"Name": "Тенге",
+			"Value": 18.5432,
+			"Previous": 18.4000
+		},
+		"BAD1": {
+			"ID": "R99999",
+			"NumCode": "000",
+			"CharCode": "BAD1",
+			"Nominal": 1,
+			"Name": "Некорректный код",
+			"Value": 10.0000,
+			"Previous": 10.0000
 		}
 	}
-	return out
+}`
+
+func TestDefaultEndpoint_PointsToWorkingJSONFeed(t *testing.T) {
+	u, err := url.Parse(cbr.DefaultEndpoint)
+	if err != nil {
+		t.Fatalf("invalid DefaultEndpoint %q: %v", cbr.DefaultEndpoint, err)
+	}
+	if u.Scheme != "https" || u.Host != "www.cbr-xml-daily.ru" || u.Path != "/daily_json.js" {
+		t.Fatalf("unexpected DefaultEndpoint %q, want https://cbr-xml-daily.ru", cbr.DefaultEndpoint)
+	}
 }
 
-const sampleXML = `<?xml version="1.0" encoding="windows-1251"?>
-<ValCurs Date="20.11.2026" name="Foreign Currency Market">
-	<Valute ID="R01235">
-		<NumCode>840</NumCode>
-		<CharCode>USD</CharCode>
-		<Nominal>1</Nominal>
-		<Name>Доллар США</Name>
-		<Value>91,4567</Value>
-	</Valute>
-	<Valute ID="R01335">
-		<NumCode>398</NumCode>
-		<CharCode>KZT</CharCode>
-		<Nominal>100</Nominal>
-		<Name>Тенге</Name>
-		<Value>18,5432</Value>
-	</Valute>
-	<Valute ID="R99999">
-		<NumCode>000</NumCode>
-		<CharCode>BAD1</CharCode>
-		<Nominal>1</Nominal>
-		<Name>Некорректный код</Name>
-		<Value>10,0000</Value>
-	</Valute>
-</ValCurs>`
-
-func TestFetchLatest_ParsesDateNominal100AndRUB(t *testing.T) {
+func TestFetchLatest_ParsesDateNominal100RUBAndUnknownCurrency(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("date_req") != "" {
-			t.Errorf("unexpected date_req for FetchLatest: %s", r.URL.RawQuery)
+		if got := r.Header.Get("Accept"); got != "application/json" {
+			t.Errorf("unexpected Accept header: %q", got)
 		}
-		w.Header().Set("Content-Type", "application/xml; charset=windows-1251")
-		_, _ = w.Write(encodeWin1251(sampleXML))
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_, _ = w.Write([]byte(sampleJSON))
 	}))
 	defer srv.Close()
 
-	client := cbr.NewClient(cbr.WithEndpoint(srv.URL))
+	client := cbr.NewClient(cbr.WithEndpoint(srv.URL + "/daily_json.js"))
 	got, err := client.FetchLatest(context.Background())
 	if err != nil {
 		t.Fatalf("FetchLatest failed: %v", err)
@@ -78,37 +79,40 @@ func TestFetchLatest_ParsesDateNominal100AndRUB(t *testing.T) {
 		t.Fatalf("got date %v, want %v", got.Date, wantDate)
 	}
 
-	rub, ok := got.Rates[money.RUB]
-	if !ok || rub.RUBPerUnitString() != "1.0000000000" {
-		t.Fatalf("RUB rate mismatch: %+v", rub)
+	rub, err := got.RateFor(money.RUB)
+	if err != nil || rub.RUBPerUnitString() != "1.0000000000" {
+		t.Fatalf("RUB rate mismatch: %+v, err=%v", rub, err)
 	}
 
-	usd, ok := got.Rates["USD"]
-	if !ok || usd.RUBPerUnitString() != "91.4567000000" {
-		t.Fatalf("USD rate mismatch: %+v", usd)
+	usd, err := got.RateFor("USD")
+	if err != nil || usd.RUBPerUnitString() != "91.4567000000" {
+		t.Fatalf("USD rate mismatch: %+v, err=%v", usd, err)
 	}
 
-	kzt, ok := got.Rates["KZT"]
-	if !ok || kzt.RUBPerUnitString() != "0.1854320000" {
-		t.Fatalf("KZT (nominal 100) rate mismatch: %+v", kzt)
+	kzt, err := got.RateFor("KZT")
+	if err != nil || kzt.RUBPerUnitString() != "0.1854320000" {
+		t.Fatalf("KZT (nominal 100) rate mismatch: %+v, err=%v", kzt, err)
 	}
 
 	if _, exists := got.Rates["BAD1"]; exists {
 		t.Fatal("invalid currency code BAD1 must be ignored")
 	}
+
+	if _, err := got.RateFor("XYZ"); !errors.Is(err, cbr.ErrUnknownCurrency) {
+		t.Fatalf("expected ErrUnknownCurrency for XYZ, got %v", err)
+	}
 }
 
-func TestFetchByDate_PassesFormattedQueryAndReadsEffectiveDate(t *testing.T) {
+func TestFetchByDate_RequestsArchivePathAndReadsEffectiveDate(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Query().Get("date_req"); got != "22/11/2026" {
-			t.Fatalf("got date_req %q, want 22/11/2026", got)
+		if r.URL.Path != "/archive/2026/11/22/daily_json.js" {
+			t.Fatalf("got path %q, want /archive/2026/11/22/daily_json.js", r.URL.Path)
 		}
-		// В выходной день ЦБ возвращает фактическую дату действия (пятницу 20.11.2026).
-		_, _ = w.Write(encodeWin1251(sampleXML))
+		_, _ = w.Write([]byte(sampleJSON))
 	}))
 	defer srv.Close()
 
-	client := cbr.NewClient(cbr.WithEndpoint(srv.URL))
+	client := cbr.NewClient(cbr.WithEndpoint(srv.URL + "/daily_json.js"))
 	reqDate := time.Date(2026, 11, 22, 15, 30, 0, 0, time.UTC)
 	got, err := client.FetchByDate(context.Background(), reqDate)
 	if err != nil {
@@ -128,28 +132,43 @@ func TestFetch_RejectsCorruptedAndInvalidRates(t *testing.T) {
 		wantErr error
 	}{
 		{
-			name:    "broken xml",
-			payload: `<?xml version="1.0" encoding="windows-1251"?><ValCurs Date="20.11.2026"><Valute>`,
+			name:    "broken json",
+			payload: `{"Date": "2026-11-20T11:30:00+03:00", "Valute": {"USD": {`,
 			wantErr: cbr.ErrInvalidResponse,
 		},
 		{
 			name:    "missing date",
-			payload: `<?xml version="1.0" encoding="utf-8"?><ValCurs><Valute><CharCode>USD</CharCode><Nominal>1</Nominal><Value>90,0</Value></Valute></ValCurs>`,
+			payload: `{"Valute": {"USD": {"CharCode": "USD", "Nominal": 1, "Value": 90.0}}}`,
+			wantErr: cbr.ErrInvalidResponse,
+		},
+		{
+			name:    "empty valute map",
+			payload: `{"Date": "2026-11-20T11:30:00+03:00", "Valute": {}}`,
 			wantErr: cbr.ErrInvalidResponse,
 		},
 		{
 			name:    "zero nominal",
-			payload: `<?xml version="1.0" encoding="utf-8"?><ValCurs Date="20.11.2026"><Valute><CharCode>USD</CharCode><Nominal>0</Nominal><Value>90,0</Value></Valute></ValCurs>`,
+			payload: `{"Date": "2026-11-20T11:30:00+03:00", "Valute": {"USD": {"CharCode": "USD", "Nominal": 0, "Value": 90.0}}}`,
 			wantErr: cbr.ErrInvalidRate,
 		},
 		{
-			name:    "negative or zero value",
-			payload: `<?xml version="1.0" encoding="utf-8"?><ValCurs Date="20.11.2026"><Valute><CharCode>USD</CharCode><Nominal>1</Nominal><Value>0,0000</Value></Valute></ValCurs>`,
+			name:    "negative nominal",
+			payload: `{"Date": "2026-11-20T11:30:00+03:00", "Valute": {"USD": {"CharCode": "USD", "Nominal": -10, "Value": 90.0}}}`,
+			wantErr: cbr.ErrInvalidRate,
+		},
+		{
+			name:    "zero value",
+			payload: `{"Date": "2026-11-20T11:30:00+03:00", "Valute": {"USD": {"CharCode": "USD", "Nominal": 1, "Value": 0}}}`,
+			wantErr: cbr.ErrInvalidRate,
+		},
+		{
+			name:    "negative value",
+			payload: `{"Date": "2026-11-20T11:30:00+03:00", "Valute": {"USD": {"CharCode": "USD", "Nominal": 1, "Value": -91.5}}}`,
 			wantErr: cbr.ErrInvalidRate,
 		},
 		{
 			name:    "non-numeric value",
-			payload: `<?xml version="1.0" encoding="utf-8"?><ValCurs Date="20.11.2026"><Valute><CharCode>USD</CharCode><Nominal>1</Nominal><Value>NaN</Value></Valute></ValCurs>`,
+			payload: `{"Date": "2026-11-20T11:30:00+03:00", "Valute": {"USD": {"CharCode": "USD", "Nominal": 1, "Value": "NaN"}}}`,
 			wantErr: cbr.ErrInvalidRate,
 		},
 	}
@@ -174,7 +193,7 @@ func TestFetch_HandlesTimeoutAndHTTPStatus(t *testing.T) {
 	t.Run("timeout", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			time.Sleep(150 * time.Millisecond)
-			_, _ = w.Write([]byte(sampleXML))
+			_, _ = w.Write([]byte(sampleJSON))
 		}))
 		defer srv.Close()
 

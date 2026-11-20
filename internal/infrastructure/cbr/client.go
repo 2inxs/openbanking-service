@@ -1,15 +1,15 @@
-// Пакет cbr реализует HTTP-клиент для получения официальных курсов валют Банка России.
+// Пакет cbr реализует HTTP-клиент для получения курсов валют Банка России
+// через сторонний JSON-сервис зеркалирования данных ЦБ РФ: cbr-xml-daily.ru.
 //
-// Используемый endpoint: https://cbr.ru
-// (при передаче даты добавляется query-параметр ?date_req=DD/MM/YYYY).
-// Ответ отдаётся в кодировке windows-1251 и содержит фактическую дату действия
-// курсов в атрибуте Date корневого элемента <ValCurs Date="DD.MM.YYYY">.
+// Актуальные курсы: https://cbr-xml-daily.ru
+// Архивные курсы на дату: https://cbr-xml-daily.ru
+// Ответ отдаётся в кодировке UTF-8 и содержит фактическую дату действия курсов в поле Date.
 package cbr
 
 import (
 	"bytes"
 	"context"
-	"encoding/xml"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,14 +18,13 @@ import (
 	"net/url"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/2inxs/openbanking-service/internal/domain/money"
 )
 
 const (
-	// DefaultEndpoint — официальный XML-фид ежедневных курсов валют ЦБ РФ.
-	DefaultEndpoint = "https://cbr.ru"
+	// DefaultEndpoint — JSON-фид ежедневных курсов валют ЦБ РФ от провайдера cbr-xml-daily.ru.
+	DefaultEndpoint = "https://cbr-xml-daily.ru"
 
 	// RateScale задаёт точность нормализованного курса (соответствует numeric(24,10) в БД).
 	RateScale = 10
@@ -36,13 +35,13 @@ const (
 
 var (
 	ErrUnexpectedStatus = errors.New("cbr: unexpected HTTP status")
-	ErrInvalidResponse  = errors.New("cbr: invalid XML response")
+	ErrInvalidResponse  = errors.New("cbr: invalid JSON response")
 	ErrInvalidRate      = errors.New("cbr: invalid exchange rate value")
 	ErrUnknownCurrency  = errors.New("cbr: unknown currency")
 )
 
 // Rate представляет нормализованный курс одной единицы валюты в рублях (RUB)
-// на фактическую дату действия, указанную Банком России.
+// на фактическую дату действия, указанную в фиде ЦБ РФ.
 type Rate struct {
 	Currency   money.Currency
 	RateDate   time.Time
@@ -58,14 +57,14 @@ func (r Rate) RUBPerUnitString() string {
 	return r.RUBPerUnit.FloatString(RateScale)
 }
 
-// DailyRates содержит набор курсов ЦБ РФ и фактическую дату их действия из ответа.
+// DailyRates содержит набор курсов и фактическую дату их действия из JSON-ответа.
 type DailyRates struct {
 	Date  time.Time
 	Rates map[money.Currency]Rate
 }
 
 // RateFor возвращает нормализованный курс для указанной валюты.
-// Проверяет корректность кода валюты и её наличие в полученном справочнике ЦБ.
+// Проверяет корректность кода валюты и её наличие в полученном справочнике.
 func (d DailyRates) RateFor(currency money.Currency) (Rate, error) {
 	if err := currency.Validate(); err != nil {
 		return Rate{}, fmt.Errorf("%w %q: %v", ErrUnknownCurrency, currency, err)
@@ -84,16 +83,16 @@ func (d DailyRates) RateFor(currency money.Currency) (Rate, error) {
 	return rate, nil
 }
 
-// Client выполняет запросы к сервису курсов валют Банка России.
+// Client выполняет HTTP-запросы к JSON API cbr-xml-daily.ru.
 type Client struct {
 	endpoint   string
 	httpClient *http.Client
 }
 
-// Option настраивает клиент ЦБ РФ.
+// Option настраивает клиент курсов валют.
 type Option func(*Client)
 
-// WithEndpoint переопределяет URL сервиса ЦБ (удобно для тестов).
+// WithEndpoint переопределяет URL JSON-фида (удобно для тестов).
 func WithEndpoint(endpoint string) Option {
 	return func(c *Client) {
 		if strings.TrimSpace(endpoint) != "" {
@@ -111,7 +110,7 @@ func WithHTTPClient(hc *http.Client) Option {
 	}
 }
 
-// NewClient создаёт клиент ЦБ РФ с настройками по умолчанию (таймаут 10s).
+// NewClient создаёт клиент cbr-xml-daily.ru с настройками по умолчанию (таймаут 10s).
 func NewClient(opts ...Option) *Client {
 	c := &Client{
 		endpoint: DefaultEndpoint,
@@ -125,19 +124,20 @@ func NewClient(opts ...Option) *Client {
 	return c
 }
 
-// FetchLatest запрашивает последний опубликованный набор курсов валют ЦБ РФ.
+// FetchLatest запрашивает последний опубликованный набор курсов валют в формате JSON.
 func (c *Client) FetchLatest(ctx context.Context) (DailyRates, error) {
 	return c.fetch(ctx, nil)
 }
 
-// FetchByDate запрашивает курсы валют ЦБ РФ на указанную дату (?date_req=DD/MM/YYYY).
-// Фактическая дата действия курсов в ответе может отличаться (например, в выходные дни).
+// FetchByDate запрашивает архивный JSON-файл курсов на указанную дату
+// (/archive/YYYY/MM/DD/daily_json.js). Фактическая дата действия курсов берётся из поля Date ответа.
 func (c *Client) FetchByDate(ctx context.Context, date time.Time) (DailyRates, error) {
 	if date.IsZero() {
 		return DailyRates{}, fmt.Errorf("%w: request date is zero", ErrInvalidResponse)
 	}
 	return c.fetch(ctx, &date)
 }
+
 func (c *Client) fetch(ctx context.Context, date *time.Time) (DailyRates, error) {
 	reqURL, err := c.buildURL(date)
 	if err != nil {
@@ -148,7 +148,7 @@ func (c *Client) fetch(ctx context.Context, date *time.Time) (DailyRates, error)
 	if err != nil {
 		return DailyRates{}, fmt.Errorf("cbr: build request: %w", err)
 	}
-	req.Header.Set("Accept", "application/xml, text/xml")
+	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "openbanking-service/1.0")
 
 	resp, err := c.httpClient.Do(req)
@@ -169,7 +169,7 @@ func (c *Client) fetch(ctx context.Context, date *time.Time) (DailyRates, error)
 		return DailyRates{}, fmt.Errorf("%w: response exceeds %d bytes", ErrInvalidResponse, maxBodyBytes)
 	}
 
-	return parseDailyXML(body)
+	return parseDailyJSON(body)
 }
 
 func (c *Client) buildURL(date *time.Time) (string, error) {
@@ -178,54 +178,52 @@ func (c *Client) buildURL(date *time.Time) (string, error) {
 		return "", fmt.Errorf("cbr: invalid endpoint %q: %w", c.endpoint, err)
 	}
 	if date != nil {
-		q := u.Query()
-		q.Set("date_req", date.Format("02/01/2006"))
-		u.RawQuery = q.Encode()
+		archivePath := fmt.Sprintf("/archive/%04d/%02d/%02d/daily_json.js", date.Year(), date.Month(), date.Day())
+		u.Path = strings.TrimSuffix(u.Path, "/daily_json.js") + archivePath
 	}
 	return u.String(), nil
 }
 
-type xmlValCurs struct {
-	XMLName xml.Name    `xml:"ValCurs"`
-	Date    string      `xml:"Date,attr"`
-	Valutes []xmlValute `xml:"Valute"`
+type jsonDailyResponse struct {
+	Date   string                       `json:"Date"`
+	Valute map[string]jsonValutePayload `json:"Valute"`
 }
 
-type xmlValute struct {
-	CharCode string `xml:"CharCode"`
-	Nominal  string `xml:"Nominal"`
-	Name     string `xml:"Name"`
-	Value    string `xml:"Value"`
+type jsonValutePayload struct {
+	CharCode string      `json:"CharCode"`
+	Nominal  json.Number `json:"Nominal"`
+	Name     string      `json:"Name"`
+	Value    json.Number `json:"Value"`
 }
 
-func parseDailyXML(data []byte) (DailyRates, error) {
+func parseDailyJSON(data []byte) (DailyRates, error) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return DailyRates{}, fmt.Errorf("%w: empty body", ErrInvalidResponse)
 	}
 
-	decoder := xml.NewDecoder(bytes.NewReader(data))
-	decoder.CharsetReader = charsetReader
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
 
-	var doc xmlValCurs
+	var doc jsonDailyResponse
 	if err := decoder.Decode(&doc); err != nil {
 		return DailyRates{}, fmt.Errorf("%w: %v", ErrInvalidResponse, err)
 	}
 
 	dateStr := strings.TrimSpace(doc.Date)
 	if dateStr == "" {
-		return DailyRates{}, fmt.Errorf("%w: missing ValCurs Date attribute", ErrInvalidResponse)
+		return DailyRates{}, fmt.Errorf("%w: missing Date field", ErrInvalidResponse)
 	}
-	rateDate, err := time.Parse("02.01.2006", dateStr)
+	parsedDate, err := time.Parse(time.RFC3339, dateStr)
 	if err != nil {
-		return DailyRates{}, fmt.Errorf("%w: invalid ValCurs Date %q: %v", ErrInvalidResponse, dateStr, err)
+		return DailyRates{}, fmt.Errorf("%w: invalid Date %q: %v", ErrInvalidResponse, dateStr, err)
 	}
-	rateDate = time.Date(rateDate.Year(), rateDate.Month(), rateDate.Day(), 0, 0, 0, 0, time.UTC)
+	rateDate := time.Date(parsedDate.Year(), parsedDate.Month(), parsedDate.Day(), 0, 0, 0, 0, time.UTC)
 
-	if len(doc.Valutes) == 0 {
+	if len(doc.Valute) == 0 {
 		return DailyRates{}, fmt.Errorf("%w: no currencies in response", ErrInvalidResponse)
 	}
 
-	rates := make(map[money.Currency]Rate, len(doc.Valutes)+1)
+	rates := make(map[money.Currency]Rate, len(doc.Valute)+1)
 	// Базовая валюта RUB всегда имеет курс 1 к самой себе.
 	rates[money.RUB] = Rate{
 		Currency:   money.RUB,
@@ -233,17 +231,20 @@ func parseDailyXML(data []byte) (DailyRates, error) {
 		RUBPerUnit: big.NewRat(1, 1),
 	}
 
-	for _, v := range doc.Valutes {
-		code := money.Currency(strings.TrimSpace(v.CharCode))
+	for key, v := range doc.Valute {
+		rawCode := strings.TrimSpace(v.CharCode)
+		if rawCode == "" {
+			rawCode = strings.TrimSpace(key)
+		}
+		code := money.Currency(rawCode)
 		if err := code.Validate(); err != nil {
-			// Пропускаем нестандартные или невалидные коды валют (не ISO 4217).
 			continue
 		}
 		if code == money.RUB {
 			continue
 		}
 
-		rubPerUnit, err := normalizeRate(v.Value, v.Nominal)
+		rubPerUnit, err := normalizeRate(v.Value.String(), v.Nominal.String())
 		if err != nil {
 			return DailyRates{}, fmt.Errorf("%w for %s: %v", ErrInvalidRate, code, err)
 		}
@@ -263,7 +264,7 @@ func parseDailyXML(data []byte) (DailyRates, error) {
 
 // normalizeRate вычисляет точный курс (value / nominal) в рублях за 1 единицу валюты без float.
 func normalizeRate(rawValue, rawNominal string) (*big.Rat, error) {
-	valStr := strings.ReplaceAll(strings.TrimSpace(rawValue), ",", ".")
+	valStr := strings.TrimSpace(rawValue)
 	if valStr == "" {
 		return nil, errors.New("empty value")
 	}
@@ -283,52 +284,4 @@ func normalizeRate(rawValue, rawNominal string) (*big.Rat, error) {
 
 	nomRat := new(big.Rat).SetInt(nomInt)
 	return new(big.Rat).Quo(valRat, nomRat), nil
-}
-
-func charsetReader(charset string, input io.Reader) (io.Reader, error) {
-	switch strings.ToLower(strings.TrimSpace(charset)) {
-	case "utf-8", "utf8", "":
-		return input, nil
-	case "windows-1251", "cp1251":
-		raw, err := io.ReadAll(input)
-		if err != nil {
-			return nil, err
-		}
-		return strings.NewReader(decodeWindows1251(raw)), nil
-	default:
-		return nil, fmt.Errorf("unsupported XML charset %q", charset)
-	}
-}
-
-// win1251High отображает байты 0x80..0xFF кодировки Windows-1251 в руны Unicode.
-var win1251High = [128]rune{
-	0x0402, 0x0403, 0x201A, 0x0453, 0x201E, 0x2026, 0x2020, 0x2021,
-	0x20AC, 0x2030, 0x0409, 0x2039, 0x040A, 0x040C, 0x040B, 0x040F,
-	0x0452, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
-	utf8.RuneError, 0x2122, 0x0459, 0x203A, 0x045A, 0x045C, 0x045B, 0x045F,
-	0x00A0, 0x040E, 0x045E, 0x0408, 0x00A4, 0x0490, 0x00A6, 0x00A7,
-	0x0401, 0x00A9, 0x0404, 0x00AB, 0x00AC, 0x00AD, 0x00AE, 0x0407,
-	0x00B0, 0x00B1, 0x0406, 0x0456, 0x0491, 0x00B5, 0x00B6, 0x00B7,
-	0x0451, 0x2116, 0x0454, 0x00BB, 0x0458, 0x0405, 0x0455, 0x0457,
-	0x0410, 0x0411, 0x0412, 0x0413, 0x0414, 0x0415, 0x0416, 0x0417,
-	0x0418, 0x0419, 0x041A, 0x041B, 0x041C, 0x041D, 0x041E, 0x041F,
-	0x0420, 0x0421, 0x0422, 0x0423, 0x0424, 0x0425, 0x0426, 0x0427,
-	0x0428, 0x0429, 0x042A, 0x042B, 0x042C, 0x042D, 0x042E, 0x042F,
-	0x0430, 0x0431, 0x0432, 0x0433, 0x0434, 0x0435, 0x0436, 0x0437,
-	0x0438, 0x0439, 0x043A, 0x043B, 0x043C, 0x043D, 0x043E, 0x043F,
-	0x0440, 0x0441, 0x0442, 0x0443, 0x0444, 0x0445, 0x0446, 0x0447,
-	0x0448, 0x0449, 0x044A, 0x044B, 0x044C, 0x044D, 0x044E, 0x044F,
-}
-
-func decodeWindows1251(src []byte) string {
-	var b strings.Builder
-	b.Grow(len(src) * 2)
-	for _, c := range src {
-		if c < 0x80 {
-			b.WriteByte(c)
-		} else {
-			b.WriteRune(win1251High[c-0x80])
-		}
-	}
-	return b.String()
 }
