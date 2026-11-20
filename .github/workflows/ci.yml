@@ -31,6 +31,9 @@ jobs:
           go-version-file: go.mod
           cache: false # Enable caching once the project has dependencies and go.sum.
 
+      - name: Test PR branch automation
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
+
       - name: Check formatting
         shell: bash
         run: |
