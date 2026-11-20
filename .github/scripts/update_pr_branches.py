@@ -89,15 +89,12 @@ def update_branch(repo, number, branch, still_current):
 
 def main():
     repository = os.environ["GITHUB_REPOSITORY"]
-    target = os.environ.get("TARGET_PR", "")
-    if target:
-        pulls = [api(f"repos/{repository}/pulls/{int(target)}")]
-    else:
-        pages = api(
-            f"repos/{repository}/pulls?state=open&base=main&per_page=100",
-            paginate=True,
-        )
-        pulls = [pr for page in pages for pr in page]
+    # Каждый запуск проверяет все PR: объединение событий в очереди не теряет ветки.
+    pages = api(
+        f"repos/{repository}/pulls?state=open&base=main&per_page=100",
+        paginate=True,
+    )
+    pulls = [pr for page in pages for pr in page]
 
     rows = []
     failed = False

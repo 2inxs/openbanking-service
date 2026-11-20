@@ -45,5 +45,4 @@ jobs:
       - name: Update open PR branches
         env:
           GH_TOKEN: ${{ github.token }}
-          TARGET_PR: ${{ github.event.pull_request.number || '' }}
         run: python3 .github/scripts/update_pr_branches.py
