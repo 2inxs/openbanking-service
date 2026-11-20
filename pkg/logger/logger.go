@@ -10,7 +10,30 @@ import (
 	"time"
 )
 
-const redactedValue = "[REDACTED]"
+// reservedContextKeys защищены от повторного маскирования, так как содержат системные UUID/ID.
+var reservedContextKeys = map[string]struct{}{
+	"request_id":     {},
+	"trace_id":       {},
+	"user_id":        {},
+	"job":            {},
+	"bank_id":        {},
+	"interaction_id": {},
+	"resource_id":    {},
+	"account_id":     {},
+	"consent_id":     {},
+	"payment_id":     {},
+	"event_id":       {},
+	"client_id":      {},
+}
+
+func isReservedSystemIDKey(key string) bool {
+	k := strings.ToLower(strings.TrimSpace(key))
+	if IsSecretKey(k) || IsAmountKey(k) || IsCardOrAccountKey(k) {
+		return false
+	}
+	_, ok := reservedContextKeys[k]
+	return ok
+}
 
 // New создаёт настроенный JSON-логгер с маскированием чувствительных данных.
 // Если w == nil, вывод направляется в os.Stderr.
@@ -49,12 +72,10 @@ func parseLevel(s string) (slog.Level, error) {
 }
 
 func replaceAttr(groups []string, a slog.Attr) slog.Attr {
-	// Если любая из родительских групп является секретной (например, slog.Group("access_token", ...)),
-	// скрываем все атрибуты внутри неё.
 	for _, g := range groups {
 		gk := strings.ToLower(strings.TrimSpace(g))
-		if isSecretKey(gk) || isAmountKey(gk) {
-			return slog.String(a.Key, redactedValue)
+		if IsSecretKey(gk) || IsAmountKey(gk) {
+			return slog.String(a.Key, RedactedValue)
 		}
 	}
 
@@ -68,13 +89,18 @@ func replaceAttr(groups []string, a slog.Attr) slog.Attr {
 		return slog.Group(a.Key, anySlice(sanitized)...)
 	}
 
-	// Обрабатываем сложные объекты (map, slice, struct), переданные через slog.Any
 	if a.Value.Kind() == slog.KindAny {
 		key := strings.ToLower(strings.TrimSpace(a.Key))
-		if isSecretKey(key) || isAmountKey(key) {
-			return slog.String(a.Key, redactedValue)
+		if IsSecretKey(key) || IsAmountKey(key) {
+			return slog.String(a.Key, RedactedValue)
 		}
-		return slog.Any(a.Key, sanitizeAny(a.Value.Any(), 0))
+		val := a.Value.Any()
+		if isReservedSystemIDKey(key) {
+			if s, ok := val.(string); ok {
+				return slog.String(a.Key, s)
+			}
+		}
+		return slog.Any(a.Key, sanitizeAny(val, 0))
 	}
 
 	return sanitizeScalar(a)
@@ -84,12 +110,17 @@ func sanitizeScalar(a slog.Attr) slog.Attr {
 	key := strings.ToLower(strings.TrimSpace(a.Key))
 
 	switch {
-	case isSecretKey(key) || isAmountKey(key):
-		return slog.String(a.Key, redactedValue)
+	case IsSecretKey(key) || IsAmountKey(key):
+		return slog.String(a.Key, RedactedValue)
 	case key == "email" || strings.HasSuffix(key, "_email"):
-		return slog.String(a.Key, maskEmail(a.Value.String()))
-	case isCardOrAccountKey(key):
-		return slog.String(a.Key, maskLast4(a.Value.String()))
+		return slog.String(a.Key, MaskEmail(a.Value.String()))
+	case IsCardOrAccountKey(key):
+		return slog.String(a.Key, MaskLast4(a.Value.String()))
+	case a.Value.Kind() == slog.KindString:
+		if isReservedSystemIDKey(key) {
+			return a
+		}
+		return slog.String(a.Key, SanitizeStringValue(a.Value.String()))
 	default:
 		return a
 	}
@@ -100,11 +131,11 @@ func sanitizeAny(v any, depth int) any {
 		return nil
 	}
 	if depth > 8 {
-		return "[REDACTED]"
+		return RedactedValue
 	}
 
 	if err, ok := v.(error); ok {
-		return err.Error()
+		return SanitizeStringValue(err.Error())
 	}
 
 	rv := reflect.ValueOf(v)
@@ -116,6 +147,9 @@ func sanitizeAny(v any, depth int) any {
 	}
 
 	switch rv.Kind() {
+	case reflect.String:
+		return SanitizeStringValue(rv.String())
+
 	case reflect.Map:
 		res := make(map[string]any, rv.Len())
 		iter := rv.MapRange()
@@ -126,7 +160,6 @@ func sanitizeAny(v any, depth int) any {
 		return res
 
 	case reflect.Slice, reflect.Array:
-		// []byte не трогаем
 		if rv.Type().Elem().Kind() == reflect.Uint8 {
 			return v
 		}
@@ -137,7 +170,6 @@ func sanitizeAny(v any, depth int) any {
 		return res
 
 	case reflect.Struct:
-		// fmt.Stringer (например, time.Time) оставляем как есть
 		if _, ok := v.(time.Time); ok {
 			return v
 		}
@@ -170,80 +202,20 @@ func sanitizeAny(v any, depth int) any {
 func sanitizeFieldValue(key string, val any, depth int) any {
 	k := strings.ToLower(strings.TrimSpace(key))
 	switch {
-	case isSecretKey(k) || isAmountKey(k):
-		return redactedValue
+	case IsSecretKey(k) || IsAmountKey(k):
+		return RedactedValue
 	case k == "email" || strings.HasSuffix(k, "_email"):
-		return maskEmail(fmt.Sprint(val))
-	case isCardOrAccountKey(k):
-		return maskLast4(fmt.Sprint(val))
+		return MaskEmail(fmt.Sprint(val))
+	case IsCardOrAccountKey(k):
+		return MaskLast4(fmt.Sprint(val))
+	case isReservedSystemIDKey(k):
+		if s, ok := val.(string); ok {
+			return s
+		}
+		return sanitizeAny(val, depth)
 	default:
 		return sanitizeAny(val, depth)
 	}
-}
-
-func isSecretKey(key string) bool {
-	secretSubstrings := []string{
-		"password",
-		"passwd",
-		"secret",
-		"token",
-		"authorization",
-		"cookie",
-		"cvv",
-		"cvc",
-		"api_key",
-		"apikey",
-		"private_key",
-	}
-	for _, sub := range secretSubstrings {
-		if strings.Contains(key, sub) {
-			return true
-		}
-	}
-	return false
-}
-
-func isAmountKey(key string) bool {
-	switch key {
-	case "amount", "amount_kop", "balance", "balance_kop":
-		return true
-	default:
-		return false
-	}
-}
-
-func isCardOrAccountKey(key string) bool {
-	switch key {
-	case "pan", "card_number", "card", "account_number", "account":
-		return true
-	default:
-		return false
-	}
-}
-
-func maskEmail(email string) string {
-	email = strings.TrimSpace(email)
-	if email == "" {
-		return ""
-	}
-	at := strings.IndexByte(email, '@')
-	if at <= 0 {
-		return redactedValue
-	}
-	runes := []rune(email[:at])
-	return string(runes[:1]) + "***" + email[at:]
-}
-
-func maskLast4(val string) string {
-	cleaned := strings.NewReplacer(" ", "", "-", "").Replace(strings.TrimSpace(val))
-	if cleaned == "" {
-		return ""
-	}
-	runes := []rune(cleaned)
-	if len(runes) <= 4 {
-		return "****"
-	}
-	return "****" + string(runes[len(runes)-4:])
 }
 
 func anySlice(attrs []slog.Attr) []any {
