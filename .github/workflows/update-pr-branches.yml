@@ -1,0 +1,49 @@
+name: Update PR branches
+
+on:
+  push:
+    branches: [main]
+  pull_request_target:
+    branches: [main]
+    types: [opened, reopened, synchronize, ready_for_review, edited]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: update-pr-branches
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Update branches from main
+    if: github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check automation key
+        env:
+          SYNC_KEY: ${{ secrets.PR_BRANCH_SYNC_KEY }}
+        run: |
+          if [ -z "$SYNC_KEY" ]; then
+            echo 'Configure the PR_BRANCH_SYNC_KEY deploy key before enabling this workflow.'
+            exit 1
+          fi
+
+      # Выполняем только код из main. Код веток PR не запускается с ключом записи.
+      - name: Check out trusted main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          ssh-key: ${{ secrets.PR_BRANCH_SYNC_KEY }}
+          persist-credentials: true
+
+      - name: Update open PR branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_PR: ${{ github.event.pull_request.number || '' }}
+        run: python3 .github/scripts/update_pr_branches.py
