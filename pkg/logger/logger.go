@@ -19,10 +19,19 @@ var reservedContextKeys = map[string]struct{}{
 	"bank_id":        {},
 	"interaction_id": {},
 	"resource_id":    {},
+	"account_id":     {},
+	"consent_id":     {},
+	"payment_id":     {},
+	"event_id":       {},
+	"client_id":      {},
 }
 
 func isReservedSystemIDKey(key string) bool {
-	_, ok := reservedContextKeys[strings.ToLower(strings.TrimSpace(key))]
+	k := strings.ToLower(strings.TrimSpace(key))
+	if IsSecretKey(k) || IsAmountKey(k) || IsCardOrAccountKey(k) {
+		return false
+	}
+	_, ok := reservedContextKeys[k]
 	return ok
 }
 
