@@ -66,7 +66,7 @@ func (t Transaction) Validate() error {
 		if err := t.OriginalValue.Validate(); err != nil {
 			return fmt.Errorf("transaction.original_value: %w", err)
 		}
-		if t.Value.Amount.Sign()*t.OriginalValue.Amount.Sign() < 0 {
+		if originalSign := t.OriginalValue.Amount.Sign(); originalSign != 0 && originalSign != t.Value.Amount.Sign() {
 			return invalid("transaction.original_value", "must have the same direction as the account movement")
 		}
 	}

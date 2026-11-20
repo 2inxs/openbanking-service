@@ -163,6 +163,39 @@ func TestTransactionOriginalCurrencyAndSource(t *testing.T) {
 	}
 }
 
+func TestTransactionOriginalDirectionIncludingZero(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		movement string
+		original string
+		valid    bool
+	}{
+		{"credit", "100", "1", true},
+		{"debit", "-100", "-1", true},
+		{"credit with original debit", "100", "-1", false},
+		{"debit with original credit", "-100", "1", false},
+		{"zero with original credit", "0", "1", false},
+		{"zero with original debit", "0", "-1", false},
+		{"both zero", "0", "0", true},
+		{"credit with zero original", "100", "0", true},
+		{"debit with zero original", "-100", "0", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tx := transaction(t)
+			tx.Value = value(t, tc.movement, "RUB")
+			original := value(t, tc.original, "EUR")
+			tx.OriginalValue = &original
+			err := tx.Validate()
+			if tc.valid && err != nil {
+				t.Fatalf("valid original direction rejected: %v", err)
+			}
+			if !tc.valid && !errors.Is(err, domain.ErrInvalidModel) {
+				t.Fatalf("expected invalid original direction, got %v", err)
+			}
+		})
+	}
+}
+
 func TestTransactionRejectsInvalidFields(t *testing.T) {
 	for _, mutate := range []func(*domain.Transaction){
 		func(tx *domain.Transaction) { tx.ID = "" },

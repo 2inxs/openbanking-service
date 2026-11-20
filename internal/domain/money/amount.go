@@ -22,7 +22,8 @@ type Amount struct {
 	units *big.Int
 }
 
-// Parse отклоняет лишние дробные знаки, а не округляет входную сумму молча.
+// Parse допускает ведущие нули и отрицательный ноль: String вернёт "1.2000" для "001.2" и "0.0000" для "-0.0000".
+// Лишние дробные знаки отклоняются, а не округляются молча.
 func Parse(value string) (Amount, error) {
 	original := value
 	negative := strings.HasPrefix(value, "-")
