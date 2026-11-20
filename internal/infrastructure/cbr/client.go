@@ -19,6 +19,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/2inxs/openbanking-service/internal/domain/money"
 )
 
 const (
@@ -36,6 +38,7 @@ var (
 	ErrUnexpectedStatus = errors.New("cbr: unexpected HTTP status")
 	ErrInvalidResponse  = errors.New("cbr: invalid XML response")
 	ErrInvalidRate      = errors.New("cbr: invalid exchange rate value")
+	ErrUnknownCurrency  = errors.New("cbr: unknown currency")
 )
 
 // Rate представляет нормализованный курс одной единицы валюты в рублях (RUB)
@@ -59,6 +62,26 @@ func (r Rate) RUBPerUnitString() string {
 type DailyRates struct {
 	Date  time.Time
 	Rates map[money.Currency]Rate
+}
+
+// RateFor возвращает нормализованный курс для указанной валюты.
+// Проверяет корректность кода валюты и её наличие в полученном справочнике ЦБ.
+func (d DailyRates) RateFor(currency money.Currency) (Rate, error) {
+	if err := currency.Validate(); err != nil {
+		return Rate{}, fmt.Errorf("%w %q: %v", ErrUnknownCurrency, currency, err)
+	}
+	if currency == money.RUB {
+		return Rate{
+			Currency:   money.RUB,
+			RateDate:   d.Date,
+			RUBPerUnit: big.NewRat(1, 1),
+		}, nil
+	}
+	rate, ok := d.Rates[currency]
+	if !ok || rate.RUBPerUnit == nil || rate.RUBPerUnit.Sign() <= 0 {
+		return Rate{}, fmt.Errorf("%w: %s", ErrUnknownCurrency, currency)
+	}
+	return rate, nil
 }
 
 // Client выполняет запросы к сервису курсов валют Банка России.
@@ -115,7 +138,6 @@ func (c *Client) FetchByDate(ctx context.Context, date time.Time) (DailyRates, e
 	}
 	return c.fetch(ctx, &date)
 }
-
 func (c *Client) fetch(ctx context.Context, date *time.Time) (DailyRates, error) {
 	reqURL, err := c.buildURL(date)
 	if err != nil {
@@ -127,6 +149,7 @@ func (c *Client) fetch(ctx context.Context, date *time.Time) (DailyRates, error)
 		return DailyRates{}, fmt.Errorf("cbr: build request: %w", err)
 	}
 	req.Header.Set("Accept", "application/xml, text/xml")
+	req.Header.Set("User-Agent", "openbanking-service/1.0")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
