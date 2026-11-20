@@ -14,24 +14,21 @@ import (
 	"github.com/2inxs/openbanking-service/internal/mockbank/utils"
 )
 
-const (
-	basePath     = "/open-banking/v1/mockbank"
-	demoClientID = "cl-001"
-)
+const basePath = "/open-banking/v1/mockbank"
 
 type handler struct {
 	svc *service.Service
 }
 
-func NewHandler(svc *service.Service) http.Handler {
+func NewHandler(svc *service.Service, auth AuthConfig) http.Handler {
 	h := &handler{svc: svc}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", handleHealth)
-	mux.HandleFunc("GET "+basePath+"/accounts", h.listAccounts)
-	mux.HandleFunc("GET "+basePath+"/accounts/{accountId}", h.getAccount)
-	mux.HandleFunc("GET "+basePath+"/accounts/{accountId}/balances", h.getBalances)
-	mux.HandleFunc("GET "+basePath+"/accounts/{accountId}/transactions", h.getTransactions)
+	mux.HandleFunc("GET "+basePath+"/accounts", requireToken(auth, h.listAccounts))
+	mux.HandleFunc("GET "+basePath+"/accounts/{accountId}", requireToken(auth, h.getAccount))
+	mux.HandleFunc("GET "+basePath+"/accounts/{accountId}/balances", requireToken(auth, h.getBalances))
+	mux.HandleFunc("GET "+basePath+"/accounts/{accountId}/transactions", requireToken(auth, h.getTransactions))
 
 	return mux
 }
@@ -42,7 +39,7 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // listAccounts - GET /accounts
 func (h *handler) listAccounts(w http.ResponseWriter, r *http.Request) {
-	accounts := h.svc.Accounts(demoClientID)
+	accounts := h.svc.Accounts(clientIDFrom(r))
 
 	items := make([]dto.AccountDTO, 0, len(accounts))
 	for _, acc := range accounts {
@@ -58,7 +55,7 @@ func (h *handler) listAccounts(w http.ResponseWriter, r *http.Request) {
 // getAccount - GET /accounts/{accountId}
 func (h *handler) getAccount(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("accountId")
-	acc, err := h.svc.Account(demoClientID, id)
+	acc, err := h.svc.Account(clientIDFrom(r), id)
 	if err != nil {
 		writeAccountError(w, id, err)
 		return
@@ -73,7 +70,7 @@ func (h *handler) getAccount(w http.ResponseWriter, r *http.Request) {
 // getBalances - GET /accounts/{accountId}/balances
 func (h *handler) getBalances(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("accountId")
-	acc, err := h.svc.Account(demoClientID, id)
+	acc, err := h.svc.Account(clientIDFrom(r), id)
 	if err != nil {
 		writeAccountError(w, id, err)
 		return
@@ -101,12 +98,12 @@ func (h *handler) getTransactions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	acc, err := h.svc.Account(demoClientID, id)
+	acc, err := h.svc.Account(clientIDFrom(r), id)
 	if err != nil {
 		writeAccountError(w, id, err)
 		return
 	}
-	txs, err := h.svc.Transactions(demoClientID, id, from, to)
+	txs, err := h.svc.Transactions(clientIDFrom(r), id, from, to)
 	if errors.Is(err, service.ErrInvalidPeriod) {
 		writeError(w, http.StatusBadRequest, dto.ErrCodeInvalidField, err.Error(), "fromBookingDateTime")
 		return

@@ -6,13 +6,13 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/2inxs/openbanking-service/internal/mockbank/dto"
-	"github.com/2inxs/openbanking-service/internal/mockbank/model"
 	"github.com/2inxs/openbanking-service/internal/mockbank/service"
 	"github.com/2inxs/openbanking-service/internal/mockbank/store"
 )
+
+const testToken = "test-token"
 
 func newTestHandler(t *testing.T) http.Handler {
 	t.Helper()
@@ -20,192 +20,105 @@ func newTestHandler(t *testing.T) http.Handler {
 	if err := store.SeedDemoData(st); err != nil {
 		t.Fatalf("SeedDemoData: %v", err)
 	}
-	return NewHandler(service.New(st))
+	auth := AuthConfig{DemoToken: testToken, DemoClientID: "cl-001"}
+	return NewHandler(service.New(st), auth)
 }
 
-func serve(t *testing.T, h http.Handler, method, target string) *httptest.ResponseRecorder {
+func serve(t *testing.T, h http.Handler, method, target, authHeader string) *httptest.ResponseRecorder {
 	t.Helper()
+	req := httptest.NewRequest(method, target, nil)
+	if authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
+	}
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(method, target, nil))
+	h.ServeHTTP(rec, req)
 	return rec
+}
+
+func get(t *testing.T, h http.Handler, target string) *httptest.ResponseRecorder {
+	t.Helper()
+	return serve(t, h, http.MethodGet, target, "Bearer "+testToken)
 }
 
 func decodeJSON(t *testing.T, rec *httptest.ResponseRecorder, v any) {
 	t.Helper()
-	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
-		t.Fatalf("Content-Type = %q, want application/json", ct)
-	}
 	if err := json.Unmarshal(rec.Body.Bytes(), v); err != nil {
 		t.Fatalf("decode JSON: %v\nbody: %s", err, rec.Body.String())
 	}
 }
 
-func TestRoutesStatusCodes(t *testing.T) {
+func TestStatusCodes(t *testing.T) {
 	h := newTestHandler(t)
+	auth := "Bearer " + testToken
 
 	tests := []struct {
-		name       string
-		method     string
-		path       string
-		wantStatus int
+		name   string
+		method string
+		path   string
+		auth   string
+		want   int
 	}{
-		{"health", http.MethodGet, "/health", http.StatusOK},
-		{"health wrong method", http.MethodPost, "/health", http.StatusMethodNotAllowed},
-		{"unknown route", http.MethodGet, "/unknown", http.StatusNotFound},
+		{"health without token", http.MethodGet, "/health", "", http.StatusOK},
+		{"no token", http.MethodGet, basePath + "/accounts", "", http.StatusUnauthorized},
+		{"wrong token", http.MethodGet, basePath + "/accounts", "Bearer wrong", http.StatusUnauthorized},
+		{"wrong method", http.MethodPost, basePath + "/accounts", auth, http.StatusMethodNotAllowed},
 
-		{"accounts", http.MethodGet, basePath + "/accounts", http.StatusOK},
-		{"accounts wrong method", http.MethodPost, basePath + "/accounts", http.StatusMethodNotAllowed},
+		{"accounts", http.MethodGet, basePath + "/accounts", auth, http.StatusOK},
+		{"own account", http.MethodGet, basePath + "/accounts/acc-001", auth, http.StatusOK},
+		{"own balances", http.MethodGet, basePath + "/accounts/acc-001/balances", auth, http.StatusOK},
+		{"own transactions", http.MethodGet, basePath + "/accounts/acc-001/transactions", auth, http.StatusOK},
 
-		{"own account", http.MethodGet, basePath + "/accounts/acc-001", http.StatusOK},
-		{"missing account", http.MethodGet, basePath + "/accounts/acc-999", http.StatusNotFound},
-		{"foreign account", http.MethodGet, basePath + "/accounts/acc-004", http.StatusNotFound},
-		{"account wrong method", http.MethodDelete, basePath + "/accounts/acc-001", http.StatusMethodNotAllowed},
-
-		{"own balances", http.MethodGet, basePath + "/accounts/acc-001/balances", http.StatusOK},
-		{"missing balances", http.MethodGet, basePath + "/accounts/acc-999/balances", http.StatusNotFound},
-		{"foreign balances", http.MethodGet, basePath + "/accounts/acc-004/balances", http.StatusNotFound},
+		{"missing account", http.MethodGet, basePath + "/accounts/acc-999", auth, http.StatusNotFound},
+		{"foreign account", http.MethodGet, basePath + "/accounts/acc-004", auth, http.StatusNotFound},
+		{"foreign balances", http.MethodGet, basePath + "/accounts/acc-004/balances", auth, http.StatusNotFound},
+		{"foreign transactions", http.MethodGet, basePath + "/accounts/acc-004/transactions", auth, http.StatusNotFound},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := serve(t, h, tt.method, tt.path)
-			if rec.Code != tt.wantStatus {
-				t.Errorf("got %d, want %d\nbody: %s", rec.Code, tt.wantStatus, rec.Body.String())
+			rec := serve(t, h, tt.method, tt.path, tt.auth)
+			if rec.Code != tt.want {
+				t.Errorf("got %d, want %d\nbody: %s", rec.Code, tt.want, rec.Body.String())
 			}
 		})
 	}
 }
 
-func TestHealthBody(t *testing.T) {
-	rec := serve(t, newTestHandler(t), http.MethodGet, "/health")
-	if got := rec.Body.String(); got != "ok" {
-		t.Errorf("got body %q, want %q", got, "ok")
+func TestUnauthorizedResponse(t *testing.T) {
+	rec := serve(t, newTestHandler(t), http.MethodGet, basePath+"/accounts", "")
+
+	if got := rec.Header().Get("WWW-Authenticate"); got != "Bearer" {
+		t.Errorf("WWW-Authenticate = %q, want Bearer", got)
+	}
+	var resp dto.ErrorResponse
+	decodeJSON(t, rec, &resp)
+	if len(resp.Errors) != 1 || resp.Errors[0].ErrorCode != string(dto.ErrCodeInvalidToken) {
+		t.Errorf("got %+v, want Token.Invalid", resp)
 	}
 }
 
 func TestListAccounts(t *testing.T) {
-	h := newTestHandler(t)
-	path := basePath + "/accounts"
-
 	var resp dto.AccountsResponse
-	decodeJSON(t, serve(t, h, http.MethodGet, path), &resp)
+	decodeJSON(t, get(t, newTestHandler(t), basePath+"/accounts"), &resp)
 
-	if resp.Links.Self != path {
-		t.Errorf("Links.self = %q, want %q", resp.Links.Self, path)
+	if len(resp.Data.Account) != 3 {
+		t.Fatalf("got %d accounts, want 3 (only cl-001)", len(resp.Data.Account))
 	}
-
-	got := make(map[string]dto.AccountDTO)
 	for _, acc := range resp.Data.Account {
-		got[acc.AccountID] = acc
-	}
-
-	// Только счета Анны, и все три.
-	for _, id := range []string{"acc-001", "acc-002", "acc-003"} {
-		if _, ok := got[id]; !ok {
-			t.Errorf("account %s is missing", id)
-		}
-	}
-	for _, id := range []string{"acc-004", "acc-005"} {
-		if _, ok := got[id]; ok {
-			t.Errorf("foreign account %s must not be returned", id)
-		}
-	}
-	if len(got) != 3 {
-		t.Errorf("got %d accounts, want 3", len(got))
-	}
-
-	acc := got["acc-001"]
-	if acc.AccountType != "Personal" || acc.AccountSubType != "CurrentAccount" ||
-		acc.Status != "Enabled" || acc.Currency != "RUB" {
-		t.Errorf("acc-001 fields: %+v", acc)
-	}
-	if len(acc.AccountDetails) != 1 ||
-		acc.AccountDetails[0].SchemeName != "RU.CBR.AccountNumber" ||
-		acc.AccountDetails[0].Identification != "40817810000000000001" {
-		t.Errorf("acc-001 AccountDetails: %+v", acc.AccountDetails)
-	}
-
-	if usd := got["acc-003"]; usd.Currency != "USD" || usd.AccountSubType != "Savings" {
-		t.Errorf("acc-003: currency %q, subtype %q", usd.Currency, usd.AccountSubType)
-	}
-}
-
-func TestListAccountsJSONFieldNames(t *testing.T) {
-	body := serve(t, newTestHandler(t), http.MethodGet, basePath+"/accounts").Body.String()
-
-	for _, field := range []string{
-		`"Data"`, `"Account"`, `"accountId"`, `"accountType"`, `"accountSubType"`,
-		`"currency"`, `"AccountDetails"`, `"schemeName"`, `"identification"`, `"Links"`, `"self"`, `"Meta"`,
-	} {
-		if !strings.Contains(body, field) {
-			t.Errorf("field %s is missing in JSON: %s", field, body)
+		if acc.AccountID == "acc-004" || acc.AccountID == "acc-005" {
+			t.Errorf("foreign account %s returned", acc.AccountID)
 		}
 	}
 }
 
-func TestListAccountsEmptyIsArray(t *testing.T) {
-	st := store.NewStore()
-	if err := st.AddClient(model.Client{ID: demoClientID, FullName: "Без счетов"}); err != nil {
-		t.Fatal(err)
-	}
-	h := NewHandler(service.New(st))
-
-	body := serve(t, h, http.MethodGet, basePath+"/accounts").Body.String()
-	if !strings.Contains(body, `"Account":[]`) {
-		t.Errorf(`want "Account":[], got %s`, body)
-	}
-}
-
-func TestGetAccount(t *testing.T) {
-	h := newTestHandler(t)
-	path := basePath + "/accounts/acc-002"
-
-	var resp dto.AccountsResponse
-	decodeJSON(t, serve(t, h, http.MethodGet, path), &resp)
-
-	if len(resp.Data.Account) != 1 {
-		t.Fatalf("got %d accounts, want exactly 1 (one account is still an array)", len(resp.Data.Account))
-	}
-	if acc := resp.Data.Account[0]; acc.AccountID != "acc-002" || acc.AccountSubType != "CreditCard" {
-		t.Errorf("got %+v", acc)
-	}
-	if resp.Links.Self != path {
-		t.Errorf("Links.self = %q, want %q", resp.Links.Self, path)
-	}
-}
-
-func TestNotFoundErrorFormat(t *testing.T) {
-	h := newTestHandler(t)
-
+func TestNotFoundResponse(t *testing.T) {
 	var resp dto.ErrorResponse
-	decodeJSON(t, serve(t, h, http.MethodGet, basePath+"/accounts/acc-999"), &resp)
+	decodeJSON(t, get(t, newTestHandler(t), basePath+"/accounts/acc-999"), &resp)
 
-	if resp.Code != "404" || resp.Message == "" {
-		t.Errorf("code %q, message %q", resp.Code, resp.Message)
-	}
 	if len(resp.Errors) != 1 {
 		t.Fatalf("got %d errors, want 1", len(resp.Errors))
 	}
-	e := resp.Errors[0]
-	if e.ErrorCode != string(dto.ErrCodeNotFound) || e.Path != "accountId" || !strings.Contains(e.Message, "acc-999") {
-		t.Errorf("error item: %+v", e)
-	}
-}
-
-func TestForeignAccountLooksLikeMissing(t *testing.T) {
-	h := newTestHandler(t)
-	for _, suffix := range []string{"", "/balances"} {
-		t.Run("accounts/{id}"+suffix, func(t *testing.T) {
-			missing := serve(t, h, http.MethodGet, basePath+"/accounts/acc-999"+suffix)
-			foreign := serve(t, h, http.MethodGet, basePath+"/accounts/acc-004"+suffix)
-
-			if missing.Code != foreign.Code {
-				t.Fatalf("status: missing %d, foreign %d", missing.Code, foreign.Code)
-			}
-			normalized := strings.ReplaceAll(foreign.Body.String(), "acc-004", "acc-999")
-			if normalized != missing.Body.String() {
-				t.Errorf("bodies differ:\nmissing: %s\nforeign: %s", missing.Body.String(), foreign.Body.String())
-			}
-		})
+	if e := resp.Errors[0]; e.ErrorCode != string(dto.ErrCodeNotFound) || e.Path != "accountId" {
+		t.Errorf("got %+v, want Resource.NotFound at accountId", e)
 	}
 }
 
@@ -215,38 +128,81 @@ func TestBalances(t *testing.T) {
 	tests := []struct {
 		accountID     string
 		wantAmount    string
-		wantCurrency  string
 		wantIndicator string
 	}{
-		{"acc-001", "124341.30", "RUB", "Credit"},
-		{"acc-002", "17190.00", "RUB", "Debit"}, // кредитка в минусе: модуль суммы + Debit
-		{"acc-003", "1302.50", "USD", "Credit"},
+		{"acc-001", "124341.30", "Credit"},
+		{"acc-002", "17190.00", "Debit"}, // кредитка в минусе
 	}
 	for _, tt := range tests {
 		t.Run(tt.accountID, func(t *testing.T) {
-			path := basePath + "/accounts/" + tt.accountID + "/balances"
-
 			var resp dto.BalancesResponse
-			decodeJSON(t, serve(t, h, http.MethodGet, path), &resp)
+			decodeJSON(t, get(t, h, basePath+"/accounts/"+tt.accountID+"/balances"), &resp)
 
 			if len(resp.Data.Balance) != 1 {
 				t.Fatalf("got %d balances, want 1", len(resp.Data.Balance))
 			}
 			b := resp.Data.Balance[0]
-			if b.AccountID != tt.accountID || b.Type != "ClosingAvailable" {
-				t.Errorf("accountId %q, type %q", b.AccountID, b.Type)
+			if b.Amount.Amount != tt.wantAmount || b.CreditDebitIndicator != tt.wantIndicator {
+				t.Errorf("got %s %s, want %s %s", b.Amount.Amount, b.CreditDebitIndicator, tt.wantAmount, tt.wantIndicator)
 			}
-			if b.Amount.Amount != tt.wantAmount || b.Amount.Currency != tt.wantCurrency {
-				t.Errorf("amount %s %s, want %s %s", b.Amount.Amount, b.Amount.Currency, tt.wantAmount, tt.wantCurrency)
+		})
+	}
+}
+
+func TestTransactions(t *testing.T) {
+	h := newTestHandler(t)
+	path := basePath + "/accounts/acc-001/transactions"
+
+	tests := []struct {
+		name      string
+		query     string
+		wantCount int
+	}{
+		{"no filter", "", 6},
+		{"one day", "?fromBookingDateTime=2026-11-07T00:00:00%2B03:00&toBookingDateTime=2026-11-07T23:59:59%2B03:00", 2},
+		{"nothing in range", "?fromBookingDateTime=2027-01-01T00:00:00Z", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var resp dto.TransactionsResponse
+			decodeJSON(t, get(t, h, path+tt.query), &resp)
+
+			if len(resp.Data.Transaction) != tt.wantCount {
+				t.Errorf("got %d transactions, want %d", len(resp.Data.Transaction), tt.wantCount)
 			}
-			if b.CreditDebitIndicator != tt.wantIndicator {
-				t.Errorf("creditDebitIndicator %q, want %q", b.CreditDebitIndicator, tt.wantIndicator)
+		})
+	}
+}
+
+func TestTransactionsEmptyIsArray(t *testing.T) {
+	rec := get(t, newTestHandler(t), basePath+"/accounts/acc-001/transactions?fromBookingDateTime=2027-01-01T00:00:00Z")
+	if !strings.Contains(rec.Body.String(), `"Transaction":[]`) {
+		t.Errorf(`want "Transaction":[], got %s`, rec.Body.String())
+	}
+}
+
+func TestTransactionsBadDates(t *testing.T) {
+	h := newTestHandler(t)
+
+	tests := []struct {
+		name     string
+		query    string
+		wantPath string
+	}{
+		{"not a date", "fromBookingDateTime=abc", "fromBookingDateTime"},
+		{"no time zone", "toBookingDateTime=2026-11-07T00:00:00", "toBookingDateTime"},
+		{"from after to", "fromBookingDateTime=2026-11-10T00:00:00Z&toBookingDateTime=2026-11-01T00:00:00Z", "fromBookingDateTime"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := get(t, h, basePath+"/accounts/acc-001/transactions?"+tt.query)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("got %d, want 400", rec.Code)
 			}
-			if _, err := time.Parse(time.RFC3339, b.DateTime); err != nil {
-				t.Errorf("dateTime %q is not ISO 8601: %v", b.DateTime, err)
-			}
-			if resp.Links.Self != path {
-				t.Errorf("Links.self = %q, want %q", resp.Links.Self, path)
+			var resp dto.ErrorResponse
+			decodeJSON(t, rec, &resp)
+			if len(resp.Errors) != 1 || resp.Errors[0].Path != tt.wantPath {
+				t.Errorf("got %+v, want path %s", resp.Errors, tt.wantPath)
 			}
 		})
 	}

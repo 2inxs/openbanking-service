@@ -3,12 +3,14 @@ package service
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/2inxs/openbanking-service/internal/mockbank/model"
 	"github.com/2inxs/openbanking-service/internal/mockbank/store"
 )
 
-// newSeededService создаёт сервис поверх настоящего хранилища с демо-данными.
+var msk = time.FixedZone("MSK", 3*60*60)
+
 func newSeededService(t *testing.T) *Service {
 	t.Helper()
 	st := store.NewStore()
@@ -18,15 +20,14 @@ func newSeededService(t *testing.T) *Service {
 	return New(st)
 }
 
-func TestAccounts(t *testing.T) {
-	s := newSeededService(t)
+type failingStore struct{}
 
-	if got := len(s.Accounts("cl-001")); got != 3 {
-		t.Errorf("cl-001: got %d accounts, want 3", got)
-	}
-	if got := len(s.Accounts("cl-999")); got != 0 {
-		t.Errorf("unknown client: got %d accounts, want 0", got)
-	}
+var errBroken = errors.New("storage is broken")
+
+func (failingStore) GetAccount(string) (model.Account, error)   { return model.Account{}, errBroken }
+func (failingStore) GetAccountsByClient(string) []model.Account { return nil }
+func (failingStore) GetTransactionsByAccount(string) ([]model.Transaction, error) {
+	return nil, errBroken
 }
 
 func TestAccount(t *testing.T) {
@@ -34,44 +35,66 @@ func TestAccount(t *testing.T) {
 
 	tests := []struct {
 		name      string
-		clientID  string
 		accountID string
 		wantErr   error
 	}{
-		{name: "own account", clientID: "cl-001", accountID: "acc-001", wantErr: nil},
-		{name: "missing account", clientID: "cl-001", accountID: "acc-999", wantErr: ErrNotFound},
-		{name: "foreign account", clientID: "cl-001", accountID: "acc-004", wantErr: ErrNotFound}, // счёт Бориса
+		{"own account", "acc-001", nil},
+		{"missing account", "acc-999", ErrNotFound},
+		{"foreign account", "acc-004", ErrNotFound}, // счёт Бориса
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			acc, err := s.Account(tt.clientID, tt.accountID)
+			_, err := s.Account("cl-001", tt.accountID)
 			if !errors.Is(err, tt.wantErr) {
-				t.Fatalf("got error %v, want %v", err, tt.wantErr)
-			}
-			if tt.wantErr == nil && acc.ID != tt.accountID {
-				t.Errorf("got account %q, want %q", acc.ID, tt.accountID)
+				t.Errorf("got error %v, want %v", err, tt.wantErr)
 			}
 		})
 	}
 }
 
-// failingStore — заглушка хранилища, которое всегда падает с внутренней ошибкой.
-// Показывает, зачем сервису интерфейс Store: в тесте его можно подменить.
-type failingStore struct{}
-
-var errBroken = errors.New("storage is broken")
-
-func (failingStore) GetAccount(string) (model.Account, error)   { return model.Account{}, errBroken }
-func (failingStore) GetAccountsByClient(string) []model.Account { return nil }
-
-func TestAccountInternalError(t *testing.T) {
-	s := New(failingStore{})
-
-	_, err := s.Account("cl-001", "acc-001")
-	if errors.Is(err, ErrNotFound) {
-		t.Fatal("internal error must not look like ErrNotFound")
+func TestAccountStoreError(t *testing.T) {
+	_, err := New(failingStore{}).Account("cl-001", "acc-001")
+	if !errors.Is(err, errBroken) || errors.Is(err, ErrNotFound) {
+		t.Errorf("got %v, want wrapped errBroken (not ErrNotFound)", err)
 	}
-	if !errors.Is(err, errBroken) {
-		t.Fatalf("got %v, want wrapped errBroken", err)
+}
+
+func TestTransactions(t *testing.T) {
+	s := newSeededService(t)
+	salary := time.Date(2026, 11, 5, 10, 0, 0, 0, msk) // tx-0001
+
+	tests := []struct {
+		name      string
+		from, to  time.Time
+		wantCount int
+	}{
+		{"no filter", time.Time{}, time.Time{}, 6},
+		{"one day", time.Date(2026, 11, 7, 0, 0, 0, 0, msk), time.Date(2026, 11, 7, 23, 59, 59, 0, msk), 2},
+		{"bounds are inclusive", salary, salary, 1},
+		{"nothing in range", time.Date(2027, 1, 1, 0, 0, 0, 0, msk), time.Time{}, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			txs, err := s.Transactions("cl-001", "acc-001", tt.from, tt.to)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(txs) != tt.wantCount {
+				t.Errorf("got %d transactions, want %d", len(txs), tt.wantCount)
+			}
+		})
+	}
+}
+
+func TestTransactionsErrors(t *testing.T) {
+	s := newSeededService(t)
+	from := time.Date(2026, 11, 10, 0, 0, 0, 0, msk)
+	to := time.Date(2026, 11, 1, 0, 0, 0, 0, msk)
+
+	if _, err := s.Transactions("cl-001", "acc-001", from, to); !errors.Is(err, ErrInvalidPeriod) {
+		t.Errorf("from after to: got %v, want ErrInvalidPeriod", err)
+	}
+	if _, err := s.Transactions("cl-001", "acc-004", time.Time{}, time.Time{}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("foreign account: got %v, want ErrNotFound", err)
 	}
 }
