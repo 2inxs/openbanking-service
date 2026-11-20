@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +15,29 @@ import (
 	"github.com/2inxs/openbanking-service/internal/usecase"
 	"github.com/2inxs/openbanking-service/pkg/logger"
 )
+
+const redactedValue = "[REDACTED]"
+
+var (
+	ErrAuditUserIDMismatch    = errors.New("audit: event user_id does not match context user_id")
+	ErrAuditRequestIDMismatch = errors.New("audit: event request_id does not match context request_id")
+)
+
+var sensitiveMetadataTokens = []string{
+	"password",
+	"passwd",
+	"secret",
+	"token",
+	"authorization",
+	"api_key",
+	"apikey",
+	"credential",
+	"private_key",
+	"card_number",
+	"pan",
+	"cvv",
+	"cvc",
+}
 
 // AuditRepo реализует usecase.AuditLogger в памяти (append-only)
 // и при наличии *slog.Logger проксирует аудит-события в техлоггер.
@@ -38,14 +63,19 @@ func (r *AuditRepo) Log(ctx context.Context, event domain.AuditEvent) error {
 		return err
 	}
 
-	// Обогащаем из контекста техлоггера, если поля не переданы явно
 	ctxFields := logger.FieldsFromContext(ctx)
-	if event.RequestID == "" {
-		event.RequestID = ctxFields.RequestID
+
+	userID, err := resolveIdentifier(event.UserID, ctxFields.UserID, ErrAuditUserIDMismatch)
+	if err != nil {
+		return err
 	}
-	if event.UserID == "" {
-		event.UserID = ctxFields.UserID
+	requestID, err := resolveIdentifier(event.RequestID, ctxFields.RequestID, ErrAuditRequestIDMismatch)
+	if err != nil {
+		return err
 	}
+
+	event.UserID = userID
+	event.RequestID = requestID
 
 	if event.ID == "" {
 		event.ID = newEventID()
@@ -54,8 +84,8 @@ func (r *AuditRepo) Log(ctx context.Context, event domain.AuditEvent) error {
 		event.OccurredAt = time.Now().UTC()
 	}
 
-	// Защитная копия map, чтобы сохранить инвариант неизменяемости записи
-	event.Metadata = cloneMetadata(event.Metadata)
+	// Защитная копия с маскированием секретов до сохранения в память (работает и без техлоггера)
+	event.Metadata = sanitizeMetadata(event.Metadata)
 
 	r.mu.Lock()
 	r.events = append(r.events, event)
@@ -64,6 +94,19 @@ func (r *AuditRepo) Log(ctx context.Context, event domain.AuditEvent) error {
 	r.writeTechLog(ctx, ctxFields, event)
 
 	return nil
+}
+
+func resolveIdentifier(eventVal, ctxVal string, mismatchErr error) (string, error) {
+	switch {
+	case eventVal == "":
+		return ctxVal, nil
+	case ctxVal == "":
+		return eventVal, nil
+	case eventVal != ctxVal:
+		return "", fmt.Errorf("%w: event=%q ctx=%q", mismatchErr, eventVal, ctxVal)
+	default:
+		return eventVal, nil
+	}
 }
 
 func (r *AuditRepo) writeTechLog(ctx context.Context, ctxFields logger.ContextFields, event domain.AuditEvent) {
@@ -79,11 +122,11 @@ func (r *AuditRepo) writeTechLog(ctx context.Context, ctxFields logger.ContextFi
 		slog.String("status", string(event.Status)),
 	}
 
-	// Добавляем user_id и request_id только если contextHandler не добавит их сам из ctx
-	if event.UserID != "" && event.UserID != ctxFields.UserID {
+	// Добавляем user_id и request_id только если их нет в ctx (иначе их запишет contextHandler без дублей)
+	if event.UserID != "" && ctxFields.UserID == "" {
 		attrs = append(attrs, slog.String("user_id", event.UserID))
 	}
-	if event.RequestID != "" && event.RequestID != ctxFields.RequestID {
+	if event.RequestID != "" && ctxFields.RequestID == "" {
 		attrs = append(attrs, slog.String("request_id", event.RequestID))
 	}
 
@@ -97,7 +140,6 @@ func (r *AuditRepo) writeTechLog(ctx context.Context, ctxFields logger.ContextFi
 		attrs = append(attrs, slog.String("user_agent", event.UserAgent))
 	}
 	if len(event.Metadata) > 0 {
-		// Передаём через slog.Any, чтобы replaceAttr в pkg/logger замаскировал чувствительные ключи
 		attrs = append(attrs, slog.Any("metadata", event.Metadata))
 	}
 
@@ -122,6 +164,31 @@ func (r *AuditRepo) ListByUser(userID string) []domain.AuditEvent {
 		}
 	}
 	return res
+}
+
+func sanitizeMetadata(src map[string]string) map[string]string {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		if isSensitiveKey(k) {
+			dst[k] = redactedValue
+			continue
+		}
+		dst[k] = v
+	}
+	return dst
+}
+
+func isSensitiveKey(key string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(key))
+	for _, token := range sensitiveMetadataTokens {
+		if strings.Contains(normalized, token) {
+			return true
+		}
+	}
+	return false
 }
 
 func cloneMetadata(src map[string]string) map[string]string {
