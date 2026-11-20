@@ -113,9 +113,17 @@ func (s *Store) AddTransaction(trx model.Transaction) error {
 	if !ok {
 		return fmt.Errorf("счет %q: %w", trx.AccountID, ErrNotFound)
 	}
+
+	for _, existing := range s.transactionsByAccount[acc.ID] {
+		if existing.ID == trx.ID {
+			return fmt.Errorf("transaction %s: %w", trx.ID, ErrAlreadyExists)
+		}
+	}
+
 	if trx.Amount <= 0 {
 		return fmt.Errorf("неверная сумма %d", trx.Amount)
 	}
+
 	switch trx.Direction {
 	case model.Credit:
 		acc.BalanceKop += trx.Amount
