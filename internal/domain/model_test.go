@@ -23,7 +23,10 @@ func value(t *testing.T, amount, currency string) money.Money {
 }
 
 func account() domain.Account {
-	return domain.Account{ID: "account-1", UserID: "user-1", BankID: "bank-1", Number: "40817810000000000001", Name: "Основной", Currency: money.RUB}
+	return domain.Account{
+		ID: "account-1", UserID: "user-1", BankID: "bank-1", Number: "40817810000000000001",
+		Name: "Основной", Type: domain.AccountCurrent, Status: domain.AccountActive, Currency: money.RUB,
+	}
 }
 
 func connection() domain.BankConnection {
@@ -98,19 +101,42 @@ func TestConnectionValidation(t *testing.T) {
 	}
 }
 
-func TestAccountRejectsMissingIdentityAndCurrency(t *testing.T) {
+func TestAccountRejectsInvalidFields(t *testing.T) {
 	for _, mutate := range []func(*domain.Account){
 		func(a *domain.Account) { a.ID = "" },
 		func(a *domain.Account) { a.UserID = "" },
 		func(a *domain.Account) { a.BankID = "" },
 		func(a *domain.Account) { a.Number = " " },
 		func(a *domain.Account) { a.Name = "" },
+		func(a *domain.Account) { a.Type = 0 },
+		func(a *domain.Account) { a.Type = -1 },
+		func(a *domain.Account) { a.Type = 99 },
+		func(a *domain.Account) { a.Status = 0 },
+		func(a *domain.Account) { a.Status = -1 },
+		func(a *domain.Account) { a.Status = 99 },
 		func(a *domain.Account) { a.Currency = "rub" },
 	} {
 		a := account()
 		mutate(&a)
 		if err := a.Validate(); err == nil {
 			t.Fatalf("accepted invalid account: %+v", a)
+		}
+	}
+}
+
+func TestAccountAcceptsKnownTypesAndStatuses(t *testing.T) {
+	for _, accountType := range []domain.AccountTypeID{
+		domain.AccountCurrent, domain.AccountCreditCard, domain.AccountSavings,
+		domain.AccountDeposit, domain.AccountTypeUnknown,
+	} {
+		for _, status := range []domain.AccountStatusID{
+			domain.AccountActive, domain.AccountClosed, domain.AccountStatusUnknown,
+		} {
+			a := account()
+			a.Type, a.Status = accountType, status
+			if err := a.Validate(); err != nil {
+				t.Fatalf("valid account type=%d status=%d rejected: %v", accountType, status, err)
+			}
 		}
 	}
 }
@@ -218,6 +244,12 @@ func TestTransactionRejectsInvalidFields(t *testing.T) {
 }
 
 func TestStatusIDsRemainStable(t *testing.T) {
+	if domain.AccountCurrent != 1 || domain.AccountCreditCard != 2 || domain.AccountSavings != 3 || domain.AccountDeposit != 4 || domain.AccountTypeUnknown != 5 {
+		t.Fatal("account type IDs changed")
+	}
+	if domain.AccountActive != 1 || domain.AccountClosed != 2 || domain.AccountStatusUnknown != 3 {
+		t.Fatal("account status IDs changed")
+	}
 	if domain.ConnectionActive != 1 || domain.ConnectionError != 2 || domain.ConnectionDisconnected != 3 || domain.ConnectionPending != 4 {
 		t.Fatal("connection status IDs changed")
 	}

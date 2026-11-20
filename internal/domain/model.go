@@ -85,6 +85,8 @@ type Account struct {
 	ExternalAccountID string
 	Number            string
 	Name              string
+	Type              AccountTypeID
+	Status            AccountStatusID
 	Currency          money.Currency
 	Balance           *BalanceSnapshot // nil — остаток неизвестен, а не равен нулю.
 }
@@ -100,6 +102,12 @@ func (a Account) Validate() error {
 		if err := required(field.name, field.value); err != nil {
 			return err
 		}
+	}
+	if !a.Type.Valid() {
+		return invalid("account.type", "is unknown")
+	}
+	if !a.Status.Valid() {
+		return invalid("account.status", "is unknown")
 	}
 	if err := a.Currency.Validate(); err != nil {
 		return fmt.Errorf("account.currency: %w", err)
