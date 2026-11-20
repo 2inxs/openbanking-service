@@ -1,8 +1,10 @@
 package cbr_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -212,4 +214,50 @@ func TestFetch_HandlesTimeoutAndHTTPStatus(t *testing.T) {
 			t.Fatalf("got err %v, want ErrUnexpectedStatus", err)
 		}
 	})
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+func TestDefaultClient_RequestsOfficialEndpointWithoutOverride(t *testing.T) {
+	var requestedURLs []string
+
+	httpClient := &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			requestedURLs = append(requestedURLs, r.URL.String())
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(encodeWin1251(sampleXML))),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	// Создаём клиент БЕЗ cbr.WithEndpoint — используется DefaultEndpoint.
+	client := cbr.NewClient(cbr.WithHTTPClient(httpClient))
+
+	if _, err := client.FetchLatest(context.Background()); err != nil {
+		t.Fatalf("FetchLatest with default endpoint failed: %v", err)
+	}
+
+	reqDate := time.Date(2026, 11, 21, 0, 0, 0, 0, time.UTC)
+	if _, err := client.FetchByDate(context.Background(), reqDate); err != nil {
+		t.Fatalf("FetchByDate with default endpoint failed: %v", err)
+	}
+
+	want := []string{
+		"https://www.cbr.ru/scripts/XML_daily.asp",
+		"https://www.cbr.ru/scripts/XML_daily.asp?date_req=21%2F11%2F2026",
+	}
+	if len(requestedURLs) != len(want) {
+		t.Fatalf("got %d requests, want %d", len(requestedURLs), len(want))
+	}
+	for i := range want {
+		if requestedURLs[i] != want[i] {
+			t.Errorf("request[%d] URL = %q, want %q", i, requestedURLs[i], want[i])
+		}
+	}
 }
