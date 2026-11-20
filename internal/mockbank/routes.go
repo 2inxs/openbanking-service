@@ -11,9 +11,8 @@ import (
 
 	"github.com/2inxs/openbanking-service/internal/mockbank/dto"
 	"github.com/2inxs/openbanking-service/internal/mockbank/service"
+	"github.com/2inxs/openbanking-service/internal/mockbank/utils"
 )
-
-var bankLocation = time.FixedZone("MSK", 3*60*60)
 
 const (
 	basePath     = "/open-banking/v1/mockbank"
@@ -32,6 +31,7 @@ func NewHandler(svc *service.Service) http.Handler {
 	mux.HandleFunc("GET "+basePath+"/accounts", h.listAccounts)
 	mux.HandleFunc("GET "+basePath+"/accounts/{accountId}", h.getAccount)
 	mux.HandleFunc("GET "+basePath+"/accounts/{accountId}/balances", h.getBalances)
+	mux.HandleFunc("GET "+basePath+"/accounts/{accountId}/transactions", h.getTransactions)
 
 	return mux
 }
@@ -40,7 +40,7 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("ok"))
 }
 
-// listAccounts — GET /accounts
+// listAccounts - GET /accounts
 func (h *handler) listAccounts(w http.ResponseWriter, r *http.Request) {
 	accounts := h.svc.Accounts(demoClientID)
 
@@ -55,7 +55,7 @@ func (h *handler) listAccounts(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// getAccount — GET /accounts/{accountId}
+// getAccount - GET /accounts/{accountId}
 func (h *handler) getAccount(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("accountId")
 	acc, err := h.svc.Account(demoClientID, id)
@@ -70,7 +70,7 @@ func (h *handler) getAccount(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// getBalances — GET /accounts/{accountId}/balances
+// getBalances - GET /accounts/{accountId}/balances
 func (h *handler) getBalances(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("accountId")
 	acc, err := h.svc.Account(demoClientID, id)
@@ -79,8 +79,49 @@ func (h *handler) getBalances(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, dto.BalancesResponse{
-		Data:  dto.BalancesData{Balance: []dto.BalanceDTO{dto.ToBalanceDTO(acc, time.Now().In(bankLocation))}},
+		Data:  dto.BalancesData{Balance: []dto.BalanceDTO{dto.ToBalanceDTO(acc, time.Now())}},
 		Links: dto.Links{Self: r.URL.Path},
+		Meta:  dto.Meta{},
+	})
+}
+
+// getTransactions - GET /accounts/{accountId}/transactions?fromBookingDateTime=<дата>&toBookingDateTime=<дата>
+func (h *handler) getTransactions(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("accountId")
+	query := r.URL.Query()
+
+	from, err := utils.ParseDateParam(query, "fromBookingDateTime")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, dto.ErrCodeInvalidField, err.Error(), "fromBookingDateTime")
+		return
+	}
+	to, err := utils.ParseDateParam(query, "toBookingDateTime")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, dto.ErrCodeInvalidField, err.Error(), "toBookingDateTime")
+		return
+	}
+
+	acc, err := h.svc.Account(demoClientID, id)
+	if err != nil {
+		writeAccountError(w, id, err)
+		return
+	}
+	txs, err := h.svc.Transactions(demoClientID, id, from, to)
+	if errors.Is(err, service.ErrInvalidPeriod) {
+		writeError(w, http.StatusBadRequest, dto.ErrCodeInvalidField, err.Error(), "fromBookingDateTime")
+		return
+	}
+	if err != nil {
+		writeAccountError(w, id, err)
+		return
+	}
+	items := make([]dto.TransactionDTO, 0, len(txs))
+	for _, tx := range txs {
+		items = append(items, dto.ToTransactionDTO(tx, acc))
+	}
+	writeJSON(w, http.StatusOK, dto.TransactionsResponse{
+		Data:  dto.TransactionsData{Transaction: items},
+		Links: dto.PageLinks{Self: r.URL.Path},
 		Meta:  dto.Meta{},
 	})
 }
