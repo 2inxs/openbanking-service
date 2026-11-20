@@ -18,6 +18,12 @@ var reservedContextKeys = map[string]struct{}{
 	"job":            {},
 	"bank_id":        {},
 	"interaction_id": {},
+	"resource_id":    {},
+}
+
+func isReservedSystemIDKey(key string) bool {
+	_, ok := reservedContextKeys[strings.ToLower(strings.TrimSpace(key))]
+	return ok
 }
 
 // New создаёт настроенный JSON-логгер с маскированием чувствительных данных.
@@ -57,12 +63,6 @@ func parseLevel(s string) (slog.Level, error) {
 }
 
 func replaceAttr(groups []string, a slog.Attr) slog.Attr {
-	if len(groups) == 0 {
-		if _, reserved := reservedContextKeys[a.Key]; reserved {
-			return a
-		}
-	}
-
 	for _, g := range groups {
 		gk := strings.ToLower(strings.TrimSpace(g))
 		if IsSecretKey(gk) || IsAmountKey(gk) {
@@ -85,7 +85,13 @@ func replaceAttr(groups []string, a slog.Attr) slog.Attr {
 		if IsSecretKey(key) || IsAmountKey(key) {
 			return slog.String(a.Key, RedactedValue)
 		}
-		return slog.Any(a.Key, sanitizeAny(a.Value.Any(), 0))
+		val := a.Value.Any()
+		if isReservedSystemIDKey(key) {
+			if s, ok := val.(string); ok {
+				return slog.String(a.Key, s)
+			}
+		}
+		return slog.Any(a.Key, sanitizeAny(val, 0))
 	}
 
 	return sanitizeScalar(a)
@@ -102,6 +108,9 @@ func sanitizeScalar(a slog.Attr) slog.Attr {
 	case IsCardOrAccountKey(key):
 		return slog.String(a.Key, MaskLast4(a.Value.String()))
 	case a.Value.Kind() == slog.KindString:
+		if isReservedSystemIDKey(key) {
+			return a
+		}
 		return slog.String(a.Key, SanitizeStringValue(a.Value.String()))
 	default:
 		return a
@@ -190,6 +199,11 @@ func sanitizeFieldValue(key string, val any, depth int) any {
 		return MaskEmail(fmt.Sprint(val))
 	case IsCardOrAccountKey(k):
 		return MaskLast4(fmt.Sprint(val))
+	case isReservedSystemIDKey(k):
+		if s, ok := val.(string); ok {
+			return s
+		}
+		return sanitizeAny(val, depth)
 	default:
 		return sanitizeAny(val, depth)
 	}
