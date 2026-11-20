@@ -6,27 +6,26 @@ import (
 	"time"
 
 	"github.com/2inxs/openbanking-service/internal/domain/money"
-	"github.com/2inxs/openbanking-service/internal/infrastructure/cbr"
 	"github.com/2inxs/openbanking-service/internal/usecase/currency"
 )
 
 type RateRepository struct {
 	mu     sync.RWMutex
-	byDate map[string]map[money.Currency]cbr.Rate
+	byDate map[string]map[money.Currency]currency.Rate
 }
 
 func NewRateRepository() *RateRepository {
 	return &RateRepository{
-		byDate: make(map[string]map[money.Currency]cbr.Rate),
+		byDate: make(map[string]map[money.Currency]currency.Rate),
 	}
 }
 
-func (r *RateRepository) SaveBatch(_ context.Context, daily cbr.DailyRates) error {
+func (r *RateRepository) SaveBatch(_ context.Context, daily currency.DailyRates) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	dateKey := daily.Date.UTC().Format("2006-01-02")
-	bucket := make(map[money.Currency]cbr.Rate, len(daily.Rates))
+	bucket := make(map[money.Currency]currency.Rate, len(daily.Rates))
 	for code, rate := range daily.Rates {
 		bucket[code] = rate
 	}
@@ -34,12 +33,12 @@ func (r *RateRepository) SaveBatch(_ context.Context, daily cbr.DailyRates) erro
 	return nil
 }
 
-func (r *RateRepository) GetRate(_ context.Context, curr money.Currency, date *time.Time) (cbr.Rate, error) {
+func (r *RateRepository) GetRate(_ context.Context, curr money.Currency, date *time.Time) (currency.Rate, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	var bestDate time.Time
-	var bestRate cbr.Rate
+	var bestRate currency.Rate
 	found := false
 
 	for _, bucket := range r.byDate {
@@ -61,7 +60,7 @@ func (r *RateRepository) GetRate(_ context.Context, curr money.Currency, date *t
 	}
 
 	if !found {
-		return cbr.Rate{}, currency.ErrRateNotFound
+		return currency.Rate{}, currency.ErrRateNotFound
 	}
 	return bestRate, nil
 }

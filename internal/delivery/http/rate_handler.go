@@ -30,7 +30,6 @@ func NewRateHandler(uc *currency.Service) *RateHandler {
 	return &RateHandler{uc: uc}
 }
 
-// RegisterRoutes регистрирует маршруты курсов валют в стандартном http.ServeMux.
 func (h *RateHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/rates/{currency}", h.GetRate)
 }
@@ -59,7 +58,7 @@ func (h *RateHandler) GetRate(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, currency.ErrInvalidCurrency):
 			writeJSON(w, http.StatusBadRequest, ErrorResponse{
-				Code:    "validation.invalid_currency",
+				Code:    "currency.invalid_code",
 				Message: "Некорректный код валюты",
 			})
 		case errors.Is(err, currency.ErrRateNotFound):
