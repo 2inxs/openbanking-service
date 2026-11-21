@@ -20,6 +20,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/2inxs/openbanking-service/internal/domain"
 	"github.com/2inxs/openbanking-service/internal/domain/money"
 )
 
@@ -28,7 +29,7 @@ const (
 	DefaultEndpoint = "https://www.cbr.ru/scripts/XML_daily.asp"
 
 	// RateScale задаёт точность нормализованного курса (соответствует numeric(24,10) в БД).
-	RateScale = 10
+	RateScale = domain.ExchangeRateScale
 
 	defaultTimeout = 10 * time.Second
 	maxBodyBytes   = 2 << 20 // 2 MiB
@@ -38,51 +39,11 @@ var (
 	ErrUnexpectedStatus = errors.New("cbr: unexpected HTTP status")
 	ErrInvalidResponse  = errors.New("cbr: invalid XML response")
 	ErrInvalidRate      = errors.New("cbr: invalid exchange rate value")
-	ErrUnknownCurrency  = errors.New("cbr: unknown currency")
+	ErrUnknownCurrency  = domain.ErrUnknownCurrency
 )
 
-// Rate представляет нормализованный курс одной единицы валюты в рублях (RUB)
-// на фактическую дату действия, указанную Банком России.
-type Rate struct {
-	Currency   money.Currency
-	RateDate   time.Time
-	RUBPerUnit *big.Rat
-}
-
-// RUBPerUnitString возвращает курс за 1 единицу валюты в виде точной десятичной строки
-// с фиксированным масштабом RateScale (10 дробных знаков), пригодной для numeric(24,10).
-func (r Rate) RUBPerUnitString() string {
-	if r.RUBPerUnit == nil {
-		return "0.0000000000"
-	}
-	return r.RUBPerUnit.FloatString(RateScale)
-}
-
-// DailyRates содержит набор курсов ЦБ РФ и фактическую дату их действия из ответа.
-type DailyRates struct {
-	Date  time.Time
-	Rates map[money.Currency]Rate
-}
-
-// RateFor возвращает нормализованный курс для указанной валюты.
-// Проверяет корректность кода валюты и её наличие в полученном справочнике ЦБ.
-func (d DailyRates) RateFor(currency money.Currency) (Rate, error) {
-	if err := currency.Validate(); err != nil {
-		return Rate{}, fmt.Errorf("%w %q: %v", ErrUnknownCurrency, currency, err)
-	}
-	if currency == money.RUB {
-		return Rate{
-			Currency:   money.RUB,
-			RateDate:   d.Date,
-			RUBPerUnit: big.NewRat(1, 1),
-		}, nil
-	}
-	rate, ok := d.Rates[currency]
-	if !ok || rate.RUBPerUnit == nil || rate.RUBPerUnit.Sign() <= 0 {
-		return Rate{}, fmt.Errorf("%w: %s", ErrUnknownCurrency, currency)
-	}
-	return rate, nil
-}
+type Rate = domain.ExchangeRate
+type DailyRates = domain.DailyRates
 
 // Client выполняет запросы к сервису курсов валют Банка России.
 type Client struct {
