@@ -350,7 +350,7 @@ components:
 
     Transaction:
       type: object
-      required: [ id, account_id, source, status, amount, currency, occurred_at ]
+      required: [id, account_id, source, status, amount, currency, occurred_at]
       properties:
         id:
           type: string
@@ -364,10 +364,10 @@ components:
           nullable: true
         source:
           type: string
-          enum: [ open_banking, statement ]
+          enum: [open_banking, statement]
         status:
           type: string
-          enum: [ pending, booked, rejected ]
+          enum: [pending, booked, rejected]
         amount:
           type: string
           example: "-350.00"
@@ -397,142 +397,142 @@ components:
         mcc:
           type: string
 
-      BankConnection:
-        type: object
-        required: [ id, bank_id, status ]
-        properties:
-          id:
-            type: string
-          bank_id:
-            type: string
-          status:
-            type: string
-            enum: [ active, error, disconnected, pending ]
-          last_synced_at:
-            type: string
-            format: date-time
-            nullable: true
+    BankConnection:
+      type: object
+      required: [id, bank_id, status]
+      properties:
+        id:
+          type: string
+        bank_id:
+          type: string
+        status:
+          type: string
+          enum: [active, error, disconnected, pending]
+        last_synced_at:
+          type: string
+          format: date-time
+          nullable: true
 
-      SyncReport:
-        type: object
-        required: [ connection_id, accounts_synced, transactions_imported, transactions_skipped, synced_at ]
-        properties:
-          connection_id:
-            type: string
-          accounts_synced:
-            type: integer
-          transactions_imported:
-            type: integer
-          transactions_skipped:
-            type: integer
-          synced_at:
-            type: string
-            format: date-time
+    SyncReport:
+      type: object
+      required: [connection_id, accounts_synced, transactions_imported, transactions_skipped, synced_at]
+      properties:
+        connection_id:
+          type: string
+        accounts_synced:
+          type: integer
+        transactions_imported:
+          type: integer
+        transactions_skipped:
+          type: integer
+        synced_at:
+          type: string
+          format: date-time
 
-      ImportReport:
-        type: object
-        required: [ import_id, account_id, status, imported_count, skipped_count, error_count ]
-        properties:
-          import_id:
-            type: string
-          account_id:
-            type: string
-          status:
-            type: string
-            enum: [ completed, failed ]
-          imported_count:
-            type: integer
-          skipped_count:
-            type: integer
-          error_count:
-            type: integer
-          row_errors:
-            type: array
-            items:
-              type: object
-              required: [ row, message ]
-              properties:
-                row:
-                  type: integer
-                message:
-                  type: string
-
-      RateResponse:
-        type: object
-        required: [ currency, rate_date, rub_per_unit ]
-        properties:
-          currency:
-            type: string
-            example: "USD"
-          rate_date:
-            type: string
-            format: date
-            example: "2026-11-20"
-          rub_per_unit:
-            type: string
-            example: "91.4567000000"
-
-      AnalyticsSummary:
-        type: object
-        required: [ currency, total_balance, total_income, total_expense, net_flow, accounts_included, accounts_without_balance ]
-        properties:
-          currency:
-            type: string
-            example: "RUB"
-          total_balance:
-            type: string
-            example: "241506.70"
-          total_income:
-            type: string
-            example: "120000.00"
-          total_expense:
-            type: string
-            example: "-34500.50"
-          net_flow:
-            type: string
-            example: "85499.50"
-          accounts_included:
-            type: integer
-            example: 2
-          accounts_without_balance:
-            type: integer
-            example: 0
-
-      ErrorResponse:
-        type: object
-        required: [ code, message ]
-        properties:
-          code:
-            type: string
-          message:
-            type: string
-          fields:
+    ImportReport:
+      type: object
+      required: [import_id, account_id, status, imported_count, skipped_count, error_count]
+      properties:
+        import_id:
+          type: string
+        account_id:
+          type: string
+        status:
+          type: string
+          enum: [completed, failed]
+        imported_count:
+          type: integer
+        skipped_count:
+          type: integer
+        error_count:
+          type: integer
+        row_errors:
+          type: array
+          items:
             type: object
-            additionalProperties:
-              type: string
+            required: [row, message]
+            properties:
+              row:
+                type: integer
+              message:
+                type: string
 
-    responses:
-      BadRequest:
-        description: Некорректные параметры или тело запроса
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ErrorResponse"
-      NotFound:
-        description: Ресурс не найден или принадлежит другому пользователю
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ErrorResponse"
-      UpstreamError:
-        description: Внешний источник данных недоступен или вернул ошибку
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ErrorResponse"
-      InternalError:
-        description: Внутренняя ошибка сервера
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ErrorResponse"
+    RateResponse:
+      type: object
+      required: [currency, rate_date, rub_per_unit]
+      properties:
+        currency:
+          type: string
+          example: "USD"
+        rate_date:
+          type: string
+          format: date
+          example: "2026-11-20"
+        rub_per_unit:
+          type: string
+          example: "91.4567000000"
+
+    AnalyticsSummary:
+      type: object
+      required: [currency, total_balance, total_income, total_expense, net_flow, accounts_included, accounts_without_balance]
+      properties:
+        currency:
+          type: string
+          example: "RUB"
+        total_balance:
+          type: string
+          example: "241506.70"
+        total_income:
+          type: string
+          example: "120000.00"
+        total_expense:
+          type: string
+          example: "-34500.50"
+        net_flow:
+          type: string
+          example: "85499.50"
+        accounts_included:
+          type: integer
+          example: 2
+        accounts_without_balance:
+          type: integer
+          example: 0
+
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        fields:
+          type: object
+          additionalProperties:
+            type: string
+
+  responses:
+    BadRequest:
+      description: ???????????? ????????? ??? ???? ???????
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: ?????? ?? ?????? ??? ??????????? ??????? ????????????
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    UpstreamError:
+      description: ??????? ???????? ?????? ?????????? ??? ?????? ??????
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    InternalError:
+      description: ?????????? ?????? ???????
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
