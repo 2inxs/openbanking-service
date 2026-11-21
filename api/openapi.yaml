@@ -1,25 +1,538 @@
-responses:
-  BadRequest:
-    description: Некорректные параметры или тело запроса
-    content:
-      application/json:
-        schema:
-          $ref: "#/components/schemas/ErrorResponse"
-  NotFound:
-    description: Ресурс не найден или принадлежит другому пользователю
-    content:
-      application/json:
-        schema:
-          $ref: "#/components/schemas/ErrorResponse"
-  UpstreamError:
-    description: Внешний источник данных недоступен или вернул ошибку
-    content:
-      application/json:
-        schema:
-          $ref: "#/components/schemas/ErrorResponse"
-  InternalError:
-    description: Внутренняя ошибка сервера
-    content:
-      application/json:
-        schema:
-          $ref: "#/components/schemas/ErrorResponse"
+openapi: 3.0.3
+info:
+  title: OpenBanking Service API (MVP)
+  version: 0.1.0
+  description: |
+    Контракт HTTP API агрегатора банковских счетов и операций для этапа MVP.
+    Подробное описание демонстрационного режима и ограничений см. в `api/README.md`.
+
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Локальный сервер MVP
+
+tags:
+  - name: Health
+    description: Проверка состояния сервиса
+  - name: Accounts
+    description: Счета демо-пользователя
+  - name: Transactions
+    description: Операции по счетам
+  - name: BankConnections
+    description: Подключение к Mock Bank и ручная синхронизация
+  - name: Statements
+    description: Импорт банковских выписок (CSV / XLSX)
+  - name: Rates
+    description: Курсы валют ЦБ РФ
+  - name: Analytics
+    description: Сводная аналитика остатков, доходов и расходов
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Проверка работоспособности сервиса
+      responses:
+        "200":
+          description: Сервис доступен
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /accounts:
+    get:
+      tags: [Accounts]
+      summary: Список счетов демо-пользователя
+      parameters:
+        - name: include_archived
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Список счетов демо-пользователя
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Account"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /accounts/{accountId}:
+    get:
+      tags: [Accounts]
+      summary: Детали одного счёта демо-пользователя
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Данные счёта
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Account"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /transactions:
+    get:
+      tags: [Transactions]
+      summary: Список операций с фильтрацией и курсорной пагинацией
+      parameters:
+        - name: account_id
+          in: query
+          schema:
+            type: string
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, booked, rejected]
+        - name: cursor
+          in: query
+          description: Подписанный курсор следующей страницы
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        "200":
+          description: Страница операций (сортировка от новых к старым)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, has_more]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Transaction"
+                  next_cursor:
+                    type: string
+                    nullable: true
+                  has_more:
+                    type: boolean
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /bank-connections:
+    post:
+      tags: [BankConnections]
+      summary: Подключить демонстрационный банк (идемпотентно)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [bank_id]
+              properties:
+                bank_id:
+                  type: string
+                  example: "mock-bank"
+      responses:
+        "200":
+          description: Подключение уже существовало и возвращено повторно
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BankConnection"
+        "201":
+          description: Подключение успешно создано
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BankConnection"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /bank-connections/{connectionId}/sync:
+    post:
+      tags: [BankConnections]
+      summary: Ручная синхронизация счетов, остатков и операций из Mock Bank
+      parameters:
+        - name: connectionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Результат синхронизации
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncReport"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+
+  /statements/import:
+    post:
+      tags: [Statements]
+      summary: Синхронный импорт банковской выписки (CSV или XLSX) в существующий счёт
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [account_id, file]
+              properties:
+                account_id:
+                  type: string
+                encoding:
+                  type: string
+                  enum: [utf-8, windows-1251]
+                  default: utf-8
+                file:
+                  type: string
+                  format: binary
+                  description: Файл CSV или XLSX (до 10 МБ, до 100 000 строк)
+      responses:
+        "200":
+          description: Итоговый отчёт об импорте
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportReport"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          description: Превышен лимит размера файла (10 МБ)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /rates/{currency}:
+    get:
+      tags: [Rates]
+      summary: Получить курс валюты к RUB (на дату или последний актуальный)
+      parameters:
+        - name: currency
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[A-Z]{3}$"
+        - name: date
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Нормализованный курс 1 единицы валюты к RUB
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RateResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /analytics/summary:
+    get:
+      tags: [Analytics]
+      summary: Сводка остатков, доходов и расходов в выбранной валюте
+      parameters:
+        - name: currency
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: "^[A-Z]{3}$"
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - name: account_ids
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Итоговые показатели (учитываются только проведённые операции booked)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalyticsSummary"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "422":
+          description: Отсутствует курс валюты на требуемую дату для конвертации
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  schemas:
+    Account:
+      type: object
+      required: [id, bank_id, number, name, type, status, currency]
+      properties:
+        id:
+          type: string
+        bank_id:
+          type: string
+        connection_id:
+          type: string
+          nullable: true
+        external_account_id:
+          type: string
+          nullable: true
+        number:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+          enum: [current, credit_card, savings, deposit, unknown]
+        status:
+          type: string
+          enum: [active, closed, unknown]
+        currency:
+          type: string
+        balance:
+          type: string
+          nullable: true
+          example: "150050.00"
+        balance_as_of:
+          type: string
+          format: date-time
+          nullable: true
+
+    Transaction:
+      type: object
+      required: [id, account_id, source, status, amount, currency, occurred_at]
+      properties:
+        id:
+          type: string
+        account_id:
+          type: string
+        statement_import_id:
+          type: string
+          nullable: true
+        external_transaction_id:
+          type: string
+          nullable: true
+        source:
+          type: string
+          enum: [open_banking, statement]
+        status:
+          type: string
+          enum: [pending, booked, rejected]
+        amount:
+          type: string
+          example: "-350.00"
+        currency:
+          type: string
+        original_amount:
+          type: string
+          nullable: true
+        original_currency:
+          type: string
+          nullable: true
+        booked_at:
+          type: string
+          format: date-time
+          nullable: true
+        value_at:
+          type: string
+          format: date-time
+          nullable: true
+        occurred_at:
+          type: string
+          format: date-time
+        description:
+          type: string
+        merchant_name:
+          type: string
+        mcc:
+          type: string
+
+    BankConnection:
+      type: object
+      required: [id, bank_id, status]
+      properties:
+        id:
+          type: string
+        bank_id:
+          type: string
+        status:
+          type: string
+          enum: [active, error, disconnected, pending]
+        last_synced_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    SyncReport:
+      type: object
+      required: [connection_id, accounts_synced, transactions_imported, transactions_skipped, synced_at]
+      properties:
+        connection_id:
+          type: string
+        accounts_synced:
+          type: integer
+        transactions_imported:
+          type: integer
+        transactions_skipped:
+          type: integer
+        synced_at:
+          type: string
+          format: date-time
+
+    ImportReport:
+      type: object
+      required: [import_id, account_id, status, imported_count, skipped_count, error_count]
+      properties:
+        import_id:
+          type: string
+        account_id:
+          type: string
+        status:
+          type: string
+          enum: [completed, failed]
+        imported_count:
+          type: integer
+        skipped_count:
+          type: integer
+        error_count:
+          type: integer
+        row_errors:
+          type: array
+          items:
+            type: object
+            required: [row, message]
+            properties:
+              row:
+                type: integer
+              message:
+                type: string
+
+    RateResponse:
+      type: object
+      required: [currency, rate_date, rub_per_unit]
+      properties:
+        currency:
+          type: string
+          example: "USD"
+        rate_date:
+          type: string
+          format: date
+          example: "2026-11-20"
+        rub_per_unit:
+          type: string
+          example: "91.4567000000"
+
+    AnalyticsSummary:
+      type: object
+      required: [currency, total_balance, total_income, total_expense, net_flow, accounts_included, accounts_without_balance]
+      properties:
+        currency:
+          type: string
+          example: "RUB"
+        total_balance:
+          type: string
+          example: "241506.70"
+        total_income:
+          type: string
+          example: "120000.00"
+        total_expense:
+          type: string
+          example: "-34500.50"
+        net_flow:
+          type: string
+          example: "85499.50"
+        accounts_included:
+          type: integer
+          example: 2
+        accounts_without_balance:
+          type: integer
+          example: 0
+
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        fields:
+          type: object
+          additionalProperties:
+            type: string
+
+    responses:
+      BadRequest:
+        description: Некорректные параметры или тело запроса
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErrorResponse"
+      NotFound:
+        description: Ресурс не найден или принадлежит другому пользователю
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErrorResponse"
+      UpstreamError:
+        description: Внешний источник данных недоступен или вернул ошибку
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErrorResponse"
+      InternalError:
+        description: Внутренняя ошибка сервера
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ErrorResponse"
