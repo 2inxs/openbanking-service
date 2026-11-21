@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"math/big"
 	"sync"
 	"time"
 
@@ -28,7 +29,7 @@ func (r *RateRepository) SaveBatch(_ context.Context, daily domain.DailyRates) e
 	dateKey := daily.Date.UTC().Format("2006-01-02")
 	bucket := make(map[money.Currency]domain.ExchangeRate, len(daily.Rates))
 	for code, rate := range daily.Rates {
-		bucket[code] = rate
+		bucket[code] = cloneExchangeRate(rate)
 	}
 	r.byDate[dateKey] = bucket
 	return nil
@@ -63,5 +64,12 @@ func (r *RateRepository) GetRate(_ context.Context, curr money.Currency, date *t
 	if !found {
 		return domain.ExchangeRate{}, currency.ErrRateNotFound
 	}
-	return bestRate, nil
+	return cloneExchangeRate(bestRate), nil
+}
+
+func cloneExchangeRate(rate domain.ExchangeRate) domain.ExchangeRate {
+	if rate.RUBPerUnit != nil {
+		rate.RUBPerUnit = new(big.Rat).Set(rate.RUBPerUnit)
+	}
+	return rate
 }
