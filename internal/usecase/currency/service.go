@@ -8,47 +8,23 @@ import (
 	"sync"
 	"time"
 
+	"github.com/2inxs/openbanking-service/internal/domain"
 	"github.com/2inxs/openbanking-service/internal/domain/money"
 )
-
-const RateScale = 10
 
 var (
 	ErrRateNotFound    = errors.New("currency: rate not found")
 	ErrInvalidCurrency = errors.New("currency: invalid currency code")
 )
 
-// Rate — доменная модель курса 1 единицы валюты к RUB на фактическую дату действия.
-type Rate struct {
-	Currency   money.Currency
-	RateDate   time.Time
-	RUBPerUnit *big.Rat
-}
-
-// RUBPerUnitString возвращает курс десятичной строкой с 10 знаками после запятой (для JSON и numeric(24,10)).
-func (r Rate) RUBPerUnitString() string {
-	if r.RUBPerUnit == nil {
-		return "0.0000000000"
-	}
-	return r.RUBPerUnit.FloatString(RateScale)
-}
-
-// DailyRates — набор курсов на конкретную дату действия ЦБ РФ.
-type DailyRates struct {
-	Date  time.Time
-	Rates map[money.Currency]Rate
-}
-
-// RateProvider описывает источник свежих курсов (адаптер над cbr.Client).
 type RateProvider interface {
-	FetchLatest(ctx context.Context) (DailyRates, error)
-	FetchByDate(ctx context.Context, date time.Time) (DailyRates, error)
+	FetchLatest(ctx context.Context) (domain.DailyRates, error)
+	FetchByDate(ctx context.Context, date time.Time) (domain.DailyRates, error)
 }
 
-// RateRepository описывает атомарное и идемпотентное хранилище курсов (memory / postgres).
 type RateRepository interface {
-	SaveBatch(ctx context.Context, rates DailyRates) error
-	GetRate(ctx context.Context, curr money.Currency, date *time.Time) (Rate, error)
+	SaveBatch(ctx context.Context, rates domain.DailyRates) error
+	GetRate(ctx context.Context, curr money.Currency, date *time.Time) (domain.ExchangeRate, error)
 }
 
 type Service struct {
@@ -64,8 +40,6 @@ func NewService(provider RateProvider, repo RateRepository) *Service {
 	}
 }
 
-// Refresh запрашивает актуальные курсы у провайдера вне транзакции и атомарно сохраняет их.
-// Имя метода совпадает с контрактом фонового воркера из раздела 8 архитектуры.
 func (s *Service) Refresh(ctx context.Context) error {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
@@ -80,7 +54,6 @@ func (s *Service) Refresh(ctx context.Context) error {
 	return nil
 }
 
-// SyncByDate запрашивает курсы на указанную дату вне транзакции и сохраняет под фактической датой действия.
 func (s *Service) SyncByDate(ctx context.Context, date time.Time) error {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
@@ -95,17 +68,16 @@ func (s *Service) SyncByDate(ctx context.Context, date time.Time) error {
 	return nil
 }
 
-// GetRate возвращает курс валюты на указанную дату (или последний доступный, если date == nil).
-func (s *Service) GetRate(ctx context.Context, curr money.Currency, date *time.Time) (Rate, error) {
+func (s *Service) GetRate(ctx context.Context, curr money.Currency, date *time.Time) (domain.ExchangeRate, error) {
 	if err := curr.Validate(); err != nil {
-		return Rate{}, fmt.Errorf("%w: %v", ErrInvalidCurrency, err)
+		return domain.ExchangeRate{}, fmt.Errorf("%w: %v", ErrInvalidCurrency, err)
 	}
 	if curr == money.RUB {
 		d := time.Now().UTC().Truncate(24 * time.Hour)
 		if date != nil {
 			d = time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC)
 		}
-		return Rate{
+		return domain.ExchangeRate{
 			Currency:   money.RUB,
 			RateDate:   d,
 			RUBPerUnit: big.NewRat(1, 1),

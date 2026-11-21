@@ -11,30 +11,31 @@ import (
 	"time"
 
 	httpdelivery "github.com/2inxs/openbanking-service/internal/delivery/http"
+	"github.com/2inxs/openbanking-service/internal/domain"
 	"github.com/2inxs/openbanking-service/internal/domain/money"
 	"github.com/2inxs/openbanking-service/internal/infrastructure/memory"
 	"github.com/2inxs/openbanking-service/internal/usecase/currency"
 )
 
 type stubProvider struct {
-	daily currency.DailyRates
+	daily domain.DailyRates
 	err   error
 }
 
-func (s *stubProvider) FetchLatest(_ context.Context) (currency.DailyRates, error) {
+func (s *stubProvider) FetchLatest(_ context.Context) (domain.DailyRates, error) {
 	return s.daily, s.err
 }
 
-func (s *stubProvider) FetchByDate(_ context.Context, _ time.Time) (currency.DailyRates, error) {
+func (s *stubProvider) FetchByDate(_ context.Context, _ time.Time) (domain.DailyRates, error) {
 	return s.daily, s.err
 }
 
 func TestRateHandler_HTTPAndUsecaseScenarios(t *testing.T) {
 	effectiveDate := time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC)
 	provider := &stubProvider{
-		daily: currency.DailyRates{
+		daily: domain.DailyRates{
 			Date: effectiveDate,
-			Rates: map[money.Currency]currency.Rate{
+			Rates: map[money.Currency]domain.ExchangeRate{
 				"USD": {
 					Currency:   "USD",
 					RateDate:   effectiveDate,
