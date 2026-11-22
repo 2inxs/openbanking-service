@@ -21,6 +21,7 @@ type BankAccount struct {
 type BankTransaction struct {
 	ExternalID   string // transactionId банка
 	Status       domain.TransactionStatusID
+	RawStatus    string
 	Value        money.Money // со знаком: поступление +, списание −
 	BookedAt     *time.Time  // nil — у Pending даты может не быть
 	ValueAt      *time.Time

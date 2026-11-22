@@ -212,9 +212,14 @@ func TestNormalizeTransactionErrors(t *testing.T) {
 		{"empty id", func(tx *bankTransaction) { tx.TransactionID = "" }},
 		{"other account", func(tx *bankTransaction) { tx.AccountID = "acc-2" }},
 		{"bad amount", func(tx *bankTransaction) { tx.Amount.Amount = "350,00" }},
-		{"unknown status", func(tx *bankTransaction) { tx.Status = "Rejected" }},
+		{"unknown status", func(tx *bankTransaction) { tx.Status = "Cancelled" }},
 		{"booked without date", func(tx *bankTransaction) { tx.BookingDateTime = "" }},
 		{"date without zone", func(tx *bankTransaction) { tx.BookingDateTime = "2026-11-07T09:15:00" }},
+		{"pending without any date", func(tx *bankTransaction) {
+			tx.Status = "Pending"
+			tx.BookingDateTime = ""
+			tx.ValueDateTime = ""
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -230,6 +235,7 @@ func TestNormalizeTransactionErrors(t *testing.T) {
 func TestPendingWithoutBookingDate(t *testing.T) {
 	tx := validBankTransaction()
 	tx.Status = "Pending"
+	tx.ValueDateTime = "2026-11-07T09:15:00+03:00"
 	tx.BookingDateTime = ""
 
 	got, err := normalizeTransaction(tx, "acc-1")

@@ -28,12 +28,15 @@ func normalizeTransaction(tx bankTransaction, accountID string) (banksync.BankTr
 	if err != nil {
 		return banksync.BankTransaction{}, fmt.Errorf("%w: transaction %s: bookingDateTime: %v", ErrInvalidBankData, tx.TransactionID, err)
 	}
-	if status == domain.TransactionBooked && bookedAt == nil {
-		return banksync.BankTransaction{}, fmt.Errorf("%w: transaction %s: booked transaction without bookingDateTime", ErrInvalidBankData, tx.TransactionID)
-	}
 	valueAt, err := parseOptionalTime(tx.ValueDateTime)
 	if err != nil {
 		return banksync.BankTransaction{}, fmt.Errorf("%w: transaction %s: valueDateTime: %v", ErrInvalidBankData, tx.TransactionID, err)
+	}
+	if bookedAt == nil && valueAt == nil {
+		return banksync.BankTransaction{}, fmt.Errorf("%w: transaction %s: neither bookingDateTime nor valueDateTime", ErrInvalidBankData, tx.TransactionID)
+	}
+	if status == domain.TransactionBooked && bookedAt == nil {
+		return banksync.BankTransaction{}, fmt.Errorf("%w: transaction %s: booked transaction without bookingDateTime", ErrInvalidBankData, tx.TransactionID)
 	}
 	var merchantName string
 	var mcc string
@@ -44,6 +47,7 @@ func normalizeTransaction(tx bankTransaction, accountID string) (banksync.BankTr
 	return banksync.BankTransaction{
 		ExternalID:   tx.TransactionID,
 		Status:       status,
+		RawStatus:    tx.Status,
 		Value:        value,
 		BookedAt:     bookedAt,
 		ValueAt:      valueAt,
@@ -59,6 +63,8 @@ func transactionStatus(status string) (domain.TransactionStatusID, error) {
 		return domain.TransactionBooked, nil
 	case "Pending":
 		return domain.TransactionPending, nil
+	case "Rejected":
+		return domain.TransactionRejected, nil
 	default:
 		return 0, fmt.Errorf("unknown status %q", status)
 	}
@@ -84,7 +90,7 @@ func ParseTransactions(data []byte, accountID string) ([]banksync.BankTransactio
 		return nil, fmt.Errorf("%w: transaction response: %v", ErrInvalidBankData, err)
 	}
 	if resp.Data.Transaction == nil {
-		return nil, fmt.Errorf("%w: accounts response: missing Data.Account", ErrInvalidBankData)
+		return nil, fmt.Errorf("%w: transactions response: missing Data.Account", ErrInvalidBankData)
 	}
 	transactions := make([]banksync.BankTransaction, 0, len(resp.Data.Transaction))
 	for _, tx := range resp.Data.Transaction {
