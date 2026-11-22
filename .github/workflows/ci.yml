@@ -52,3 +52,56 @@ jobs:
 
       - name: Test
         run: go test -race -count=1 -timeout=2m ./...
+
+  migrations:
+    name: PostgreSQL migrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-only
+          POSTGRES_DB: openbanking_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d openbanking_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: ci-only
+      PGDATABASE: openbanking_test
+      MIGRATION_DATABASE_URL: pgx5://postgres:ci-only@localhost:5432/openbanking_test?sslmode=disable
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Install migration tool
+        run: go install -tags pgx5 github.com/golang-migrate/migrate/v4/cmd/migrate@v4.20.1
+
+      - name: Apply migrations and check constraints
+        run: |
+          migrate -path migrations -database "$MIGRATION_DATABASE_URL" up
+          migrate -path migrations -database "$MIGRATION_DATABASE_URL" up
+          psql -X -v ON_ERROR_STOP=1 -f tests/migrations/integrity.sql
+
+      - name: Roll back and reapply
+        run: |
+          migrate -path migrations -database "$MIGRATION_DATABASE_URL" down -all
+          psql -X -v ON_ERROR_STOP=1 -f tests/migrations/empty.sql
+          migrate -path migrations -database "$MIGRATION_DATABASE_URL" up
+          psql -X -v ON_ERROR_STOP=1 -f tests/migrations/integrity.sql
