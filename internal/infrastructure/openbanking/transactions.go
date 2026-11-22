@@ -76,11 +76,16 @@ func parseOptionalTime(date string) (*time.Time, error) {
 }
 
 func ParseTransactions(data []byte, accountID string) ([]banksync.BankTransaction, error) {
+	if accountID == "" {
+		return nil, fmt.Errorf("%w: empty requested accountId", ErrInvalidBankData)
+	}
 	var resp transactionsResponse
 	if err := json.Unmarshal(data, &resp); err != nil {
 		return nil, fmt.Errorf("%w: transaction response: %v", ErrInvalidBankData, err)
 	}
-
+	if resp.Data.Transaction == nil {
+		return nil, fmt.Errorf("%w: accounts response: missing Data.Account", ErrInvalidBankData)
+	}
 	transactions := make([]banksync.BankTransaction, 0, len(resp.Data.Transaction))
 	for _, tx := range resp.Data.Transaction {
 		normalized, err := normalizeTransaction(tx, accountID)

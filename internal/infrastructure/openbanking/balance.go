@@ -29,6 +29,9 @@ func normalizeBalance(b bankBalance, accountID string) (domain.BalanceSnapshot, 
 }
 
 func ParseBalance(data []byte, accountID string) (domain.BalanceSnapshot, error) {
+	if accountID == "" {
+		return domain.BalanceSnapshot{}, fmt.Errorf("%w: empty requested accountId", ErrInvalidBankData)
+	}
 	var resp balancesResponse
 	err := json.Unmarshal(data, &resp)
 	if err != nil {

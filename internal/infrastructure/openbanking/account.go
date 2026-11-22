@@ -76,7 +76,9 @@ func ParseAccounts(body []byte) ([]banksync.BankAccount, error) {
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, fmt.Errorf("%w: accounts response: %v", ErrInvalidBankData, err)
 	}
-
+	if resp.Data.Account == nil {
+		return nil, fmt.Errorf("%w: accounts response: missing Data.Account", ErrInvalidBankData)
+	}
 	accounts := make([]banksync.BankAccount, 0, len(resp.Data.Account))
 	for _, acc := range resp.Data.Account {
 		normalized, err := normalizeAccount(acc)
