@@ -96,7 +96,6 @@ func (a Account) Validate() error {
 		{"account.id", string(a.ID)},
 		{"account.user_id", string(a.UserID)},
 		{"account.bank_id", string(a.BankID)},
-		{"account.number", a.Number},
 		{"account.name", a.Name},
 	} {
 		if err := required(field.name, field.value); err != nil {
@@ -114,6 +113,12 @@ func (a Account) Validate() error {
 	}
 	if err := optional("account.connection_id", string(a.ConnectionID)); err != nil {
 		return err
+	}
+	if err := optional("account.number", a.Number); err != nil {
+		return err
+	}
+	if a.Number == "" && a.ExternalAccountID == "" {
+		return invalid("account", "requires a number or external account ID")
 	}
 	if a.ExternalAccountID != "" {
 		if a.ConnectionID == "" {
