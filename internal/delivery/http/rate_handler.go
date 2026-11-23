@@ -12,7 +12,7 @@ import (
 )
 
 type RateResponse struct {
-	Currency   string `json:"currency"`
+	Currency   string `json:"currency_code"`
 	RateDate   string `json:"rate_date"`
 	RUBPerUnit string `json:"rub_per_unit"`
 }
@@ -46,7 +46,7 @@ func (h *RateHandler) GetRate(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, ErrorResponse{
 				Code:    "validation.invalid_date",
-				Message: "Некорректный формат даты, ожидается YYYY-MM-DD",
+				Message: "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ С„РѕСЂРјР°С‚ РґР°С‚С‹, РѕР¶РёРґР°РµС‚СЃСЏ YYYY-MM-DD",
 			})
 			return
 		}
@@ -59,17 +59,17 @@ func (h *RateHandler) GetRate(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, currency.ErrInvalidCurrency):
 			writeJSON(w, http.StatusBadRequest, ErrorResponse{
 				Code:    "currency.invalid_code",
-				Message: "Некорректный код валюты",
+				Message: "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ РєРѕРґ РІР°Р»СЋС‚С‹",
 			})
 		case errors.Is(err, currency.ErrRateNotFound):
 			writeJSON(w, http.StatusNotFound, ErrorResponse{
 				Code:    "currency.rate_not_found",
-				Message: "Курс для указанной валюты не найден",
+				Message: "РљСѓСЂСЃ РґР»СЏ СѓРєР°Р·Р°РЅРЅРѕР№ РІР°Р»СЋС‚С‹ РЅРµ РЅР°Р№РґРµРЅ",
 			})
 		default:
 			writeJSON(w, http.StatusInternalServerError, ErrorResponse{
 				Code:    "internal.error",
-				Message: "Внутренняя ошибка сервера",
+				Message: "Р’РЅСѓС‚СЂРµРЅРЅСЏСЏ РѕС€РёР±РєР° СЃРµСЂРІРµСЂР°",
 			})
 		}
 		return
