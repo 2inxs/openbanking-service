@@ -29,7 +29,7 @@ jobs:
         uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
-          cache: false # Enable caching once the project has dependencies and go.sum.
+          cache: true
 
       - name: Test PR branch automation
         run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
@@ -57,27 +57,18 @@ jobs:
     name: PostgreSQL migrations
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: ci-only
-          POSTGRES_DB: openbanking_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d openbanking_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     env:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ci-only
+      POSTGRES_DB: openbanking_test
+      POSTGRES_PORT: "5433"
+      POSTGRES_TEST_URL: postgres://postgres:ci-only@localhost:5433/openbanking_test?sslmode=disable
       PGHOST: localhost
-      PGPORT: "5432"
+      PGPORT: "5433"
       PGUSER: postgres
       PGPASSWORD: ci-only
       PGDATABASE: openbanking_test
-      MIGRATION_DATABASE_URL: pgx5://postgres:ci-only@localhost:5432/openbanking_test?sslmode=disable
+      MIGRATION_DATABASE_URL: pgx5://postgres:ci-only@localhost:5433/openbanking_test?sslmode=disable
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -88,10 +79,13 @@ jobs:
         uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
-          cache: false
+          cache: true
 
       - name: Install migration tool
         run: go install -tags pgx5 github.com/golang-migrate/migrate/v4/cmd/migrate@v4.20.1
+
+      - name: Start PostgreSQL with Compose
+        run: docker compose up -d --wait postgres
 
       - name: Apply migrations and check constraints
         run: |
@@ -105,3 +99,16 @@ jobs:
           psql -X -v ON_ERROR_STOP=1 -f tests/migrations/empty.sql
           migrate -path migrations -database "$MIGRATION_DATABASE_URL" up
           psql -X -v ON_ERROR_STOP=1 -f tests/migrations/integrity.sql
+
+      - name: PostgreSQL integration tests
+        run: go test -race -tags integration -count=1 -timeout=2m ./tests/integration
+
+      - name: Verify persistent volume
+        run: |
+          docker compose down
+          docker compose up -d --wait postgres
+          psql -X -v ON_ERROR_STOP=1 -f tests/migrations/integrity.sql
+
+      - name: Clean up test database
+        if: always()
+        run: docker compose down --volumes
