@@ -1,6 +1,6 @@
 # Миграции PostgreSQL
 
-Нужен PostgreSQL 15+. Используем `golang-migrate` v4.20.1; миграции запускаются отдельно от API. Пул соединений и локальное окружение относятся к #7.
+Нужен PostgreSQL 15+. Используем `golang-migrate` v4.20.1; миграции запускаются отдельно от API. Запуск PostgreSQL через Docker Compose и подключение API описаны в [README](../README.md).
 
 ```sh
 go install -tags pgx5 github.com/golang-migrate/migrate/v4/cmd/migrate@v4.20.1

@@ -12,9 +12,11 @@ func clearSettings(t *testing.T) {
 		"HTTP_ADDR", "HTTP_READ_HEADER_TIMEOUT", "HTTP_READ_TIMEOUT",
 		"HTTP_WRITE_TIMEOUT", "HTTP_IDLE_TIMEOUT", "SHUTDOWN_TIMEOUT",
 		"LOG_LEVEL",
+		"DATABASE_URL", "DB_MAX_CONNS", "DB_CONNECT_TIMEOUT", "DB_STARTUP_TIMEOUT", "DB_STATEMENT_TIMEOUT",
 	} {
 		t.Setenv(name, "")
 	}
+	t.Setenv("DATABASE_URL", "postgres://postgres@localhost:5432/openBanking?sslmode=disable")
 }
 
 func TestLoadDefaults(t *testing.T) {
@@ -49,6 +51,10 @@ func TestLoadOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Config{
+		Database: DatabaseConfig{
+			URL: "postgres://postgres@localhost:5432/openBanking?sslmode=disable", MaxConns: 10,
+			ConnectTimeout: 5 * time.Second, StartupTimeout: 10 * time.Second, StatementTimeout: 30 * time.Second,
+		},
 		HTTPAddr:              "[::1]:9090",
 		HTTPReadHeaderTimeout: 2 * time.Second,
 		HTTPReadTimeout:       20 * time.Second,
@@ -79,6 +85,7 @@ func TestLoadRejectsInvalidTimeouts(t *testing.T) {
 	for _, name := range []string{
 		"HTTP_READ_HEADER_TIMEOUT", "HTTP_READ_TIMEOUT", "HTTP_WRITE_TIMEOUT",
 		"HTTP_IDLE_TIMEOUT", "SHUTDOWN_TIMEOUT",
+		"DB_CONNECT_TIMEOUT", "DB_STARTUP_TIMEOUT", "DB_STATEMENT_TIMEOUT",
 	} {
 		for _, value := range []string{"0s", "-1s", "five", "5"} {
 			t.Run(name+"/"+value, func(t *testing.T) {
@@ -103,5 +110,42 @@ func TestLoadRejectsInvalidLogLevel(t *testing.T) {
 				t.Fatalf("expected LOG_LEVEL error, got %v", err)
 			}
 		})
+	}
+}
+
+func TestDatabaseSettings(t *testing.T) {
+	clearSettings(t)
+	t.Setenv("DB_MAX_CONNS", "3")
+	t.Setenv("DB_CONNECT_TIMEOUT", "2s")
+	t.Setenv("DB_STARTUP_TIMEOUT", "4s")
+	t.Setenv("DB_STATEMENT_TIMEOUT", "15s")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Database.MaxConns != 3 || cfg.Database.ConnectTimeout != 2*time.Second || cfg.Database.StartupTimeout != 4*time.Second || cfg.Database.StatementTimeout != 15*time.Second {
+		t.Fatal("database overrides were not applied")
+	}
+	for _, value := range []string{"0", "-1", "many", "2147483648"} {
+		t.Setenv("DB_MAX_CONNS", value)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "DB_MAX_CONNS") {
+			t.Fatalf("expected DB_MAX_CONNS validation error, got %v", err)
+		}
+	}
+}
+
+func TestDatabaseURLRequired(t *testing.T) {
+	clearSettings(t)
+	t.Setenv("DATABASE_URL", "")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "DATABASE_URL") {
+		t.Fatalf("expected required DATABASE_URL error, got %v", err)
+	}
+}
+
+func TestStatementTimeoutFitsPostgreSQL(t *testing.T) {
+	clearSettings(t)
+	t.Setenv("DB_STATEMENT_TIMEOUT", "1000h")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "DB_STATEMENT_TIMEOUT") {
+		t.Fatalf("expected PostgreSQL timeout limit error, got %v", err)
 	}
 }
