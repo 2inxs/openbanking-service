@@ -12,6 +12,7 @@ import (
 
 // Config contains the settings needed to start and stop the API.
 type Config struct {
+	Database              DatabaseConfig
 	HTTPAddr              string
 	HTTPReadHeaderTimeout time.Duration
 	HTTPReadTimeout       time.Duration
@@ -21,10 +22,23 @@ type Config struct {
 	LogLevel              string
 }
 
-// Load reads environment variables. Unset or empty variables use defaults.
+type DatabaseConfig struct {
+	URL              string
+	MaxConns         int32
+	ConnectTimeout   time.Duration
+	StartupTimeout   time.Duration
+	StatementTimeout time.Duration
+}
+
+// Load reads environment variables. DATABASE_URL is required; other settings have defaults.
 // It does not load a .env file; the process environment is the source of truth.
 func Load() (Config, error) {
 	cfg := Config{
+		Database: DatabaseConfig{
+			URL: os.Getenv("DATABASE_URL"), MaxConns: 10,
+			ConnectTimeout: 5 * time.Second, StartupTimeout: 10 * time.Second,
+			StatementTimeout: 30 * time.Second,
+		},
 		HTTPAddr:              "127.0.0.1:8080",
 		HTTPReadHeaderTimeout: 5 * time.Second,
 		HTTPReadTimeout:       15 * time.Second,
@@ -32,6 +46,16 @@ func Load() (Config, error) {
 		HTTPIdleTimeout:       60 * time.Second,
 		ShutdownTimeout:       10 * time.Second,
 		LogLevel:              "info",
+	}
+	if strings.TrimSpace(cfg.Database.URL) == "" {
+		return Config{}, fmt.Errorf("DATABASE_URL is required")
+	}
+	if value := os.Getenv("DB_MAX_CONNS"); value != "" {
+		n, err := strconv.ParseInt(value, 10, 32)
+		if err != nil || n < 1 {
+			return Config{}, fmt.Errorf("DB_MAX_CONNS must be a positive 32-bit integer")
+		}
+		cfg.Database.MaxConns = int32(n)
 	}
 	if value := os.Getenv("HTTP_ADDR"); value != "" {
 		cfg.HTTPAddr = value
@@ -64,6 +88,9 @@ func Load() (Config, error) {
 		{"HTTP_WRITE_TIMEOUT", &cfg.HTTPWriteTimeout},
 		{"HTTP_IDLE_TIMEOUT", &cfg.HTTPIdleTimeout},
 		{"SHUTDOWN_TIMEOUT", &cfg.ShutdownTimeout},
+		{"DB_CONNECT_TIMEOUT", &cfg.Database.ConnectTimeout},
+		{"DB_STARTUP_TIMEOUT", &cfg.Database.StartupTimeout},
+		{"DB_STATEMENT_TIMEOUT", &cfg.Database.StatementTimeout},
 	} {
 		value := os.Getenv(setting.name)
 		if value == "" {
@@ -77,6 +104,9 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("%s must be greater than zero", setting.name)
 		}
 		*setting.target = duration
+	}
+	if cfg.Database.StatementTimeout > time.Duration(1<<31-1)*time.Millisecond {
+		return Config{}, fmt.Errorf("DB_STATEMENT_TIMEOUT must not exceed 2147483647ms")
 	}
 	return cfg, nil
 }

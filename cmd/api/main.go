@@ -37,5 +37,5 @@ func main() {
 func run(cfg config.Config, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return app.New(cfg, log).Run(ctx)
+	return app.Run(ctx, cfg, log)
 }
