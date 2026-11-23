@@ -1,0 +1,1 @@
+{"Data":{"Balance":[{"accountId":"acc-002","creditDebitIndicator":"Debit","type":"ClosingAvailable","dateTime":"2026-11-21T20:04:55+03:00","Amount":{"amount":"17190.00","currency":"RUB"}}]},"Links":{"self":"/open-banking/v1/mockbank/accounts/acc-002/balances"},"Meta":{}}
