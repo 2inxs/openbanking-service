@@ -13,6 +13,7 @@ func clearSettings(t *testing.T) {
 		"HTTP_WRITE_TIMEOUT", "HTTP_IDLE_TIMEOUT", "SHUTDOWN_TIMEOUT",
 		"LOG_LEVEL",
 		"DATABASE_URL", "DB_MAX_CONNS", "DB_CONNECT_TIMEOUT", "DB_STARTUP_TIMEOUT", "DB_STATEMENT_TIMEOUT",
+		"RATES_REFRESH_INTERVAL", "RATES_RETRY_INTERVAL", "RATES_REQUEST_TIMEOUT",
 	} {
 		t.Setenv(name, "")
 	}
@@ -31,6 +32,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.HTTPReadHeaderTimeout <= 0 || cfg.HTTPReadTimeout <= 0 || cfg.HTTPWriteTimeout <= 0 || cfg.HTTPIdleTimeout <= 0 {
 		t.Fatalf("HTTP timeouts must be positive: %+v", cfg)
 	}
+	if cfg.Rates.RefreshInterval <= 0 || cfg.Rates.RetryInterval <= 0 || cfg.Rates.RequestTimeout <= 0 {
+		t.Fatalf("Rates timeouts must be positive: %+v", cfg)
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {
@@ -43,6 +47,9 @@ func TestLoadOverrides(t *testing.T) {
 		"HTTP_IDLE_TIMEOUT":        "2m",
 		"SHUTDOWN_TIMEOUT":         "3s",
 		"LOG_LEVEL":                "debug",
+		"RATES_REFRESH_INTERVAL":   "30m",
+		"RATES_RETRY_INTERVAL":     "1m",
+		"RATES_REQUEST_TIMEOUT":    "5s",
 	} {
 		t.Setenv(name, value)
 	}
@@ -54,6 +61,11 @@ func TestLoadOverrides(t *testing.T) {
 		Database: DatabaseConfig{
 			URL: "postgres://postgres@localhost:5432/openBanking?sslmode=disable", MaxConns: 10,
 			ConnectTimeout: 5 * time.Second, StartupTimeout: 10 * time.Second, StatementTimeout: 30 * time.Second,
+		},
+		Rates: RatesConfig{
+			RefreshInterval: 30 * time.Minute,
+			RetryInterval:   time.Minute,
+			RequestTimeout:  5 * time.Second,
 		},
 		HTTPAddr:              "[::1]:9090",
 		HTTPReadHeaderTimeout: 2 * time.Second,
@@ -86,6 +98,7 @@ func TestLoadRejectsInvalidTimeouts(t *testing.T) {
 		"HTTP_READ_HEADER_TIMEOUT", "HTTP_READ_TIMEOUT", "HTTP_WRITE_TIMEOUT",
 		"HTTP_IDLE_TIMEOUT", "SHUTDOWN_TIMEOUT",
 		"DB_CONNECT_TIMEOUT", "DB_STARTUP_TIMEOUT", "DB_STATEMENT_TIMEOUT",
+		"RATES_REFRESH_INTERVAL", "RATES_RETRY_INTERVAL", "RATES_REQUEST_TIMEOUT",
 	} {
 		for _, value := range []string{"0s", "-1s", "five", "5"} {
 			t.Run(name+"/"+value, func(t *testing.T) {

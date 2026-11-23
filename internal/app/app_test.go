@@ -176,3 +176,31 @@ func TestRunWithCancelledContext(t *testing.T) {
 		t.Fatalf("cancelled startup returned an error: %v", err)
 	}
 }
+func TestShutdownWaitsForBackgroundWorker(t *testing.T) {
+	a := testApp()
+	workerStarted := make(chan struct{})
+	workerStopped := make(chan struct{})
+
+	a.AddWorker(func(ctx context.Context) error {
+		close(workerStarted)
+		<-ctx.Done()
+		time.Sleep(20 * time.Millisecond)
+		close(workerStopped)
+		return nil
+	})
+
+	listener := testListener(t)
+	cancel, done := startServing(t, a, listener)
+
+	waitFor(t, workerStarted)
+	cancel()
+
+	if err := waitFor(t, done); err != nil {
+		t.Fatalf("shutdown failed: %v", err)
+	}
+	select {
+	case <-workerStopped:
+	default:
+		t.Fatal("App.Run returned before background worker finished")
+	}
+}

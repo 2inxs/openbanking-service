@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/2inxs/openbanking-service/internal/config"
@@ -19,9 +20,9 @@ type App struct {
 	server          *http.Server
 	shutdownTimeout time.Duration
 	logger          *slog.Logger
+	workers         []func(context.Context) error
 }
 
-// New builds the API. Business routes will be added by the HTTP delivery layer.
 func New(cfg config.Config, logger *slog.Logger) *App {
 	if logger == nil {
 		logger = slog.Default()
@@ -50,8 +51,13 @@ func New(cfg config.Config, logger *slog.Logger) *App {
 	}
 }
 
-// Run serves requests until cancellation or a server error.
-// Cancellation stops accepting requests and lets in-flight requests finish.
+// AddWorker регистрирует управляемую фоновую задачу, которая завершится при отмене ctx.
+func (a *App) AddWorker(fn func(context.Context) error) {
+	if fn != nil {
+		a.workers = append(a.workers, fn)
+	}
+}
+
 func (a *App) Run(ctx context.Context) error {
 	if ctx.Err() != nil {
 		return nil
@@ -65,6 +71,21 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 func (a *App) serve(ctx context.Context, listener net.Listener) error {
+	workerCtx, cancelWorkers := context.WithCancel(ctx)
+	defer cancelWorkers()
+
+	var workersWG sync.WaitGroup
+	for _, w := range a.workers {
+		worker := w
+		workersWG.Add(1)
+		go func() {
+			defer workersWG.Done()
+			if err := worker(workerCtx); err != nil && !errors.Is(err, context.Canceled) {
+				a.logger.Error("background worker stopped with error", "error", err)
+			}
+		}()
+	}
+
 	serveErrors := make(chan error, 1)
 	go func() {
 		serveErrors <- a.server.Serve(listener)
@@ -73,6 +94,8 @@ func (a *App) serve(ctx context.Context, listener net.Listener) error {
 
 	select {
 	case err := <-serveErrors:
+		cancelWorkers()
+		workersWG.Wait()
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
@@ -81,7 +104,8 @@ func (a *App) serve(ctx context.Context, listener net.Listener) error {
 	}
 
 	a.logger.Info("HTTP server stopping")
-	// The signal context is already cancelled. Shutdown needs its own deadline.
+	cancelWorkers()
+
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), a.shutdownTimeout)
 	defer cancel()
 	shutdownErr := a.server.Shutdown(shutdownCtx)
@@ -91,6 +115,9 @@ func (a *App) serve(ctx context.Context, listener net.Listener) error {
 	if err := <-serveErrors; !errors.Is(err, http.ErrServerClosed) {
 		shutdownErr = errors.Join(shutdownErr, err)
 	}
+
+	workersWG.Wait()
+
 	if shutdownErr != nil {
 		return fmt.Errorf("shut down HTTP server: %w", shutdownErr)
 	}
