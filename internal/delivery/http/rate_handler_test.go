@@ -151,24 +151,45 @@ func TestRateHandler_HTTPAndUsecaseScenarios(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
 			t.Fatalf("unmarshal error response: %v", err)
 		}
-		if errResp.Code != "currency.rate_not_found" || errResp.Message == "" {
+		if errResp.Code != "currency.rate_not_found" || errResp.Message != "Курс для указанной валюты не найден" {
 			t.Fatalf("unexpected error JSON: %+v", errResp)
 		}
 	})
 
 	t.Run("400 JSON on invalid currency or date format", func(t *testing.T) {
-		for _, path := range []string{"/api/v1/rates/INVALID", "/api/v1/rates/USD?date=20-11-2026"} {
-			req := httptest.NewRequest(http.MethodGet, path, nil)
+		cases := []struct {
+			path        string
+			wantCode    string
+			wantMessage string
+		}{
+			{
+				path:        "/api/v1/rates/INVALID",
+				wantCode:    "currency.invalid_code",
+				wantMessage: "Некорректный код валюты",
+			},
+			{
+				path:        "/api/v1/rates/USD?date=20-11-2026",
+				wantCode:    "validation.invalid_date",
+				wantMessage: "Некорректный формат даты, ожидается YYYY-MM-DD",
+			},
+		}
+
+		for _, tc := range cases {
+			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, req)
 
 			if rec.Code != http.StatusBadRequest {
-				t.Errorf("%s: got status %d, want 400", path, rec.Code)
+				t.Errorf("%s: got status %d, want 400", tc.path, rec.Code)
 			}
 			var errResp httpdelivery.ErrorResponse
-			if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil || errResp.Code == "" {
-				t.Errorf("%s: expected valid error JSON, got %q", path, rec.Body.String())
+			if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+				t.Fatalf("%s: unmarshal error JSON: %v", tc.path, err)
+			}
+			if errResp.Code != tc.wantCode || errResp.Message != tc.wantMessage {
+				t.Errorf("%s: got %+v, want code=%q message=%q", tc.path, errResp, tc.wantCode, tc.wantMessage)
 			}
 		}
 	})
+
 }

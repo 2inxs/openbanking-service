@@ -46,7 +46,7 @@ func (h *RateHandler) GetRate(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, ErrorResponse{
 				Code:    "validation.invalid_date",
-				Message: "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ С„РѕСЂРјР°С‚ РґР°С‚С‹, РѕР¶РёРґР°РµС‚СЃСЏ YYYY-MM-DD",
+				Message: "Некорректный формат даты, ожидается YYYY-MM-DD",
 			})
 			return
 		}
@@ -59,17 +59,17 @@ func (h *RateHandler) GetRate(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, currency.ErrInvalidCurrency):
 			writeJSON(w, http.StatusBadRequest, ErrorResponse{
 				Code:    "currency.invalid_code",
-				Message: "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ РєРѕРґ РІР°Р»СЋС‚С‹",
+				Message: "Некорректный код валюты",
 			})
 		case errors.Is(err, currency.ErrRateNotFound):
 			writeJSON(w, http.StatusNotFound, ErrorResponse{
 				Code:    "currency.rate_not_found",
-				Message: "РљСѓСЂСЃ РґР»СЏ СѓРєР°Р·Р°РЅРЅРѕР№ РІР°Р»СЋС‚С‹ РЅРµ РЅР°Р№РґРµРЅ",
+				Message: "Курс для указанной валюты не найден",
 			})
 		default:
 			writeJSON(w, http.StatusInternalServerError, ErrorResponse{
 				Code:    "internal.error",
-				Message: "Р’РЅСѓС‚СЂРµРЅРЅСЏСЏ РѕС€РёР±РєР° СЃРµСЂРІРµСЂР°",
+				Message: "Внутренняя ошибка сервера",
 			})
 		}
 		return
