@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math/big"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -223,5 +224,60 @@ func TestRefresherShutdownCancelsInflightRequestAndRaceSafe(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("refresher did not stop promptly on context cancel")
+	}
+}
+
+func TestRefresherRecoversFromPanicAndContinues(t *testing.T) {
+	var calls atomic.Int32
+	date := time.Date(2026, 11, 23, 0, 0, 0, 0, time.UTC)
+
+	provider := &stubProvider{
+		fetchLatestFn: func(ctx context.Context) (domain.DailyRates, error) {
+			if calls.Add(1) == 1 {
+				panic("boom in provider")
+			}
+			return domain.DailyRates{
+				Date: date,
+				Rates: map[money.Currency]domain.ExchangeRate{
+					money.USD: {Currency: money.USD, RateDate: date, RUBPerUnit: big.NewRat(95, 1)},
+				},
+			}, nil
+		},
+	}
+
+	repo := newStubRepo()
+	rateCache := cache.NewRateCache()
+	svc := NewService(provider, repo).WithCache(rateCache)
+
+	refresher := NewRefresher(svc, RefresherConfig{
+		RefreshInterval: time.Hour,
+		RetryInterval:   15 * time.Millisecond,
+		RequestTimeout:  time.Second,
+	}, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- refresher.Run(ctx)
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if rate, ok := rateCache.Get(money.USD); ok && rate.RUBPerUnit.Cmp(big.NewRat(95, 1)) == 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	rate, ok := rateCache.Get(money.USD)
+	if !ok || rate.RUBPerUnit.Cmp(big.NewRat(95, 1)) != 0 {
+		t.Fatalf("expected cache to update after panic recovery, got ok=%v rate=%v", ok, rate)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("expected nil on cancel, got %v", err)
 	}
 }

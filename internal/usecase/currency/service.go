@@ -103,6 +103,17 @@ func (s *Service) SyncByDate(ctx context.Context, date time.Time) error {
 	if err := s.repo.SaveBatch(ctx, daily); err != nil {
 		return fmt.Errorf("currency: save rates batch: %w", err)
 	}
+
+	if s.cache != nil && !daily.Date.IsZero() {
+		cachedDate, _, ok := s.cache.Meta()
+		dailyDay := time.Date(daily.Date.Year(), daily.Date.Month(), daily.Date.Day(), 0, 0, 0, 0, time.UTC)
+		cachedDay := time.Date(cachedDate.Year(), cachedDate.Month(), cachedDate.Day(), 0, 0, 0, 0, time.UTC)
+
+		// Обновляем кэш только если он пуст или загруженная дата не старше текущей в кэше.
+		if !ok || cachedDate.IsZero() || !dailyDay.Before(cachedDay) {
+			s.cache.Replace(daily, s.nowFn().UTC())
+		}
+	}
 	return nil
 }
 

@@ -204,3 +204,41 @@ func TestShutdownWaitsForBackgroundWorker(t *testing.T) {
 		t.Fatal("App.Run returned before background worker finished")
 	}
 }
+
+func TestAppShutdownTimesOutOnHungWorker(t *testing.T) {
+	cfg := config.Config{
+		HTTPAddr:        "127.0.0.1:0",
+		ShutdownTimeout: 25 * time.Millisecond,
+	}
+	application := New(cfg, nil)
+
+	releaseWorker := make(chan struct{})
+	defer close(releaseWorker)
+
+	workerStarted := make(chan struct{})
+	application.AddWorker(func(ctx context.Context) error {
+		close(workerStarted)
+		<-releaseWorker // Игнорируем ctx.Done(), имитируя зависание
+		return nil
+	})
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+
+	runErrCh := make(chan error, 1)
+	go func() {
+		runErrCh <- application.Run(runCtx)
+	}()
+
+	<-workerStarted
+	cancelRun()
+
+	select {
+	case err := <-runErrCh:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("expected DeadlineExceeded on hung worker, got %v", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("App.Run hung past ShutdownTimeout")
+	}
+}
