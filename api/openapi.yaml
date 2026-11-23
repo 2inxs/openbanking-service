@@ -459,9 +459,9 @@ components:
 
     RateResponse:
       type: object
-      required: [currency, rate_date, rub_per_unit]
+      required: [currency_code, rate_date, rub_per_unit]
       properties:
-        currency:
+        currency_code:
           type: string
           example: "USD"
         rate_date:
