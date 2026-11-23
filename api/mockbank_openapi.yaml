@@ -1,0 +1,310 @@
+openapi: 3.0.3
+info:
+  title: Mock Bank API (MVP Subset)
+  version: 0.1.0
+  description: |
+    Подмножество банковского API, реализованное в `cmd/mockbank` для локального MVP.
+
+    ## Демонстрационный доступ и конфигурация
+    - **Демонстрационный токен:** задаётся обязательной переменной окружения `MOCKBANK_DEMO_TOKEN` (например, `dev-token-123`) и передаётся в заголовке `Authorization: Bearer <token>`.
+    - **Адрес по умолчанию:** `http://127.0.0.1:8081` (переопределяется через `MOCKBANK_HTTP_ADDR`).
+    - **Стабильные внешние ID:** идентификаторы счетов (`accountId`) и операций (`transactionId`) фиксированы в тестовых данных для дедупликации при повторной синхронизации.
+    - **Ограничения подмножества:** поддерживаются только чтение счетов, доступных остатков и операций без пагинации; интерактивный OAuth2 flow и создание согласий в MVP заменены статическим токеном.
+
+servers:
+  - url: http://127.0.0.1:8081
+    description: Локальный сервер Mock Bank
+
+paths:
+  /health:
+    get:
+      summary: Проверка работоспособности Mock Bank
+      responses:
+        "200":
+          description: Возвращает строку `ok`
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+
+  /open-banking/v1/mockbank/accounts:
+    get:
+      summary: Список счетов демонстрационного клиента
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/InteractionID"
+      responses:
+        "200":
+          description: Список счетов (в тестовом наборе — 3 счёта)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [Data, Links, Meta]
+                properties:
+                  Data:
+                    type: object
+                    required: [Account]
+                    properties:
+                      Account:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/BankAccount"
+                  Links:
+                    $ref: "#/components/schemas/Links"
+                  Meta:
+                    $ref: "#/components/schemas/Meta"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /open-banking/v1/mockbank/accounts/{accountId}/balances:
+    get:
+      summary: Остатки по указанному счёту
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/InteractionID"
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Остаток по счёту
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [Data, Links, Meta]
+                properties:
+                  Data:
+                    type: object
+                    required: [Balance]
+                    properties:
+                      Balance:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/BankBalance"
+                  Links:
+                    $ref: "#/components/schemas/Links"
+                  Meta:
+                    $ref: "#/components/schemas/Meta"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /open-banking/v1/mockbank/accounts/{accountId}/transactions:
+    get:
+      summary: Операции по указанному счёту
+      description: Возвращает полный список операций по счёту без пагинации (параметр `page` в текущем подмножестве не поддерживается).
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/InteractionID"
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: fromBookingDateTime
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: toBookingDateTime
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: Полный список операций по счёту (без разбивки на страницы)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [Data, Links, Meta]
+                properties:
+                  Data:
+                    type: object
+                    required: [Transaction]
+                    properties:
+                      Transaction:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/BankTransaction"
+                  Links:
+                    $ref: "#/components/schemas/Links"
+                  Meta:
+                    $ref: "#/components/schemas/Meta"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+
+  parameters:
+    InteractionID:
+      name: x-fapi-interaction-id
+      in: header
+      required: false
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    BankAmount:
+      type: object
+      required: [amount, currency]
+      properties:
+        amount:
+          type: string
+          example: "150050.00"
+        currency:
+          type: string
+          example: "RUB"
+
+    BankAccount:
+      type: object
+      required: [accountId, currency, accountType, accountSubType]
+      properties:
+        accountId:
+          type: string
+          example: "acc-001"
+        status:
+          type: string
+          enum: [Enabled, Disabled, Deleted, Pending]
+        currency:
+          type: string
+          example: "RUB"
+        accountType:
+          type: string
+          enum: [Personal]
+        accountSubType:
+          type: string
+          enum: [CurrentAccount, Savings, CreditCard, PrePaidCard, Loan, Mortgage]
+        accountDescription:
+          type: string
+        AccountDetails:
+          type: array
+          items:
+            type: object
+            properties:
+              schemeName:
+                type: string
+              identification:
+                type: string
+              name:
+                type: string
+
+    BankBalance:
+      type: object
+      required: [accountId, creditDebitIndicator, type, dateTime, Amount]
+      properties:
+        accountId:
+          type: string
+        creditDebitIndicator:
+          type: string
+          enum: [Credit, Debit]
+        type:
+          type: string
+          enum: [ClosingAvailable]
+        dateTime:
+          type: string
+          format: date-time
+        Amount:
+          $ref: "#/components/schemas/BankAmount"
+
+    BankTransaction:
+      type: object
+      required: [accountId, transactionId, creditDebitIndicator, status, bookingDateTime, Amount]
+      properties:
+        accountId:
+          type: string
+        transactionId:
+          type: string
+        creditDebitIndicator:
+          type: string
+          enum: [Credit, Debit]
+        status:
+          type: string
+          enum: [Booked, Pending]
+        bookingDateTime:
+          type: string
+          format: date-time
+        valueDateTime:
+          type: string
+          format: date-time
+        transactionInformation:
+          type: string
+        Amount:
+          $ref: "#/components/schemas/BankAmount"
+        MerchantDetails:
+          type: object
+          properties:
+            merchantName:
+              type: string
+            merchantCategoryCode:
+              type: string
+
+    Links:
+      type: object
+      required: [self]
+      properties:
+        self:
+          type: string
+
+    Meta:
+      type: object
+      description: Метаданные ответа (в текущем подмножестве без пагинации возвращается пустой объект `{}`)
+
+    BankErrorResponse:
+      type: object
+      required: [code, message, errors]
+      properties:
+        code:
+          type: string
+          example: "401"
+        id:
+          type: string
+          example: "c1a5e7c4-0000-0000-0000-000000000001"
+        message:
+          type: string
+          example: "Требуется авторизация"
+        errors:
+          type: array
+          items:
+            type: object
+            required: [errorCode, message]
+            properties:
+              errorCode:
+                type: string
+                example: "Token.Invalid"
+              message:
+                type: string
+                example: "Неверный или отсутствующий токен"
+              path:
+                type: string
+
+  responses:
+    Unauthorized:
+      description: Отсутствует или неверный Bearer-токен
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/BankErrorResponse"
+    NotFound:
+      description: Счёт не найден
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/BankErrorResponse"
