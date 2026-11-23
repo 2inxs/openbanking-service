@@ -24,7 +24,7 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	defer pool.Close()
 
 	rateCache := cache.NewRateCache()
-	cbrClient := cbr.NewClient(nil)
+	cbrClient := cbr.NewClient()
 	rateRepo := memory.NewRateRepository()
 
 	currencySvc := currency.NewService(cbrClient, rateRepo).WithCache(rateCache)
