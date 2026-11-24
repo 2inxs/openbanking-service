@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"://github.com"
 	"github.com/2inxs/openbanking-service/internal/domain"
 	"github.com/2inxs/openbanking-service/internal/domain/money"
 	"github.com/2inxs/openbanking-service/internal/usecase/currency"
+	"github.com/jackc/pgx/v5"
 )
 
 type RateRepository struct {
