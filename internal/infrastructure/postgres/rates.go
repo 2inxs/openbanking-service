@@ -4,6 +4,7 @@ import (
 	"context"
 	"math/big"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/2inxs/openbanking-service/internal/domain"
@@ -56,6 +57,21 @@ func loadSupportedCurrencies(ctx context.Context, q DBTX) (map[money.Currency]st
 	return supported, nil
 }
 
+func fitsNumeric24_10(r *big.Rat) bool {
+	if r == nil || r.Sign() <= 0 {
+		return false
+	}
+	formatted := r.FloatString(domain.ExchangeRateScale)
+	if formatted == "0.0000000000" {
+		return false
+	}
+	dotIdx := strings.IndexByte(formatted, '.')
+	if dotIdx == -1 {
+		return len(formatted) <= 14
+	}
+	return dotIdx <= 14
+}
+
 func (r *RateRepository) SaveBatch(ctx context.Context, daily domain.DailyRates) error {
 	if daily.Date.IsZero() {
 		return domain.ErrInvalidModel
@@ -67,8 +83,6 @@ func (r *RateRepository) SaveBatch(ctx context.Context, daily domain.DailyRates)
 		codes = append(codes, code)
 	}
 	sort.Slice(codes, func(i, j int) bool { return codes[i] < codes[j] })
-
-	maxNumeric := new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(14), nil))
 
 	validated := make([]domain.ExchangeRate, 0, len(codes))
 	for _, code := range codes {
@@ -82,7 +96,7 @@ func (r *RateRepository) SaveBatch(ctx context.Context, daily domain.DailyRates)
 		if !normalizeRateDay(rate.RateDate).Equal(expectedDay) {
 			return domain.ErrInvalidModel
 		}
-		if rate.RUBPerUnit.Cmp(maxNumeric) >= 0 {
+		if !fitsNumeric24_10(rate.RUBPerUnit) {
 			return domain.ErrInvalidModel
 		}
 		validated = append(validated, rate)
