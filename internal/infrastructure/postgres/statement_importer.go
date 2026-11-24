@@ -321,9 +321,6 @@ func computeStatementDedupKey(accountID domain.AccountID, importID string, row u
 		sum := sha256.Sum256([]byte(fmt.Sprintf("v1|%s|ext|%s", accountID, ext)))
 		return hex.EncodeToString(sum[:])
 	}
-	// Для операций без external_id привязываем ключ к конкретному импорту и номеру строки,
-	// чтобы два реальных одинаковых платежа в один день из разных выписок не склеивались,
-	// а повторная загрузка того же файла отсекалась по (account_id, file_sha256).
 	sum := sha256.Sum256([]byte(fmt.Sprintf("v1|%s|import|%s|line|%d|%s|%s|%s",
 		accountID,
 		importID,
