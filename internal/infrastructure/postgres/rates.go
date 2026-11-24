@@ -56,9 +56,8 @@ func (r *RateRepository) SaveBatch(ctx context.Context, daily domain.DailyRates)
 		if !normalizeRateDay(rate.RateDate).Equal(expectedDay) {
 			return domain.ErrInvalidModel
 		}
-		valStr := rate.RUBPerUnitString()
-		integer := strings.Split(valStr, ".")
-		if len(integer) > 14 {
+		maxNumeric := new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(14), nil))
+		if rate.RUBPerUnit.Cmp(maxNumeric) >= 0 {
 			return domain.ErrInvalidModel
 		}
 		validated = append(validated, rate)
