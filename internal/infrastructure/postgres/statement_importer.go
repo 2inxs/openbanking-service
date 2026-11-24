@@ -181,7 +181,7 @@ deduplication_key varchar(64) NOT NULL
 	}
 
 	var importID string
-	err = tx.QueryRow(ctx, `INSERT INTO statement_imports (account_id, file_name, file_sha256, status)
+	err := tx.QueryRow(ctx, `INSERT INTO statement_imports (account_id, file_name, file_sha256, status)
  VALUES ($1::uuid, $2, $3, 'processing')
  RETURNING id::text`, string(target.ID), safeFileName, fileSHA256).Scan(&importID)
 	if err != nil {
