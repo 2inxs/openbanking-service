@@ -40,12 +40,14 @@ func optional(field, value string) error {
 }
 
 type BankConnection struct {
-	ID           BankConnectionID
-	UserID       UserID
-	BankID       BankID
-	CustomerID   BankCustomerID // Может отсутствовать, если банк не выдаёт ID клиента.
-	Status       ConnectionStatusID
-	LastSyncedAt *time.Time
+	ID            BankConnectionID
+	UserID        UserID
+	BankID        BankID
+	CustomerID    BankCustomerID // Может отсутствовать, если банк не выдаёт ID клиента.
+	Status        ConnectionStatusID
+	LastSyncedAt  *time.Time
+	LastSyncError string // Только безопасное описание, без токенов и банковских реквизитов.
+	Version       int64
 }
 
 func (c BankConnection) Validate() error {
@@ -66,6 +68,9 @@ func (c BankConnection) Validate() error {
 	}
 	if c.LastSyncedAt != nil && c.LastSyncedAt.IsZero() {
 		return invalid("connection.last_synced_at", "must be absent or a real timestamp")
+	}
+	if c.Version < 0 {
+		return invalid("connection.version", "must not be negative")
 	}
 	return nil
 }
@@ -96,7 +101,6 @@ func (a Account) Validate() error {
 		{"account.id", string(a.ID)},
 		{"account.user_id", string(a.UserID)},
 		{"account.bank_id", string(a.BankID)},
-		{"account.number", a.Number},
 		{"account.name", a.Name},
 	} {
 		if err := required(field.name, field.value); err != nil {
@@ -114,6 +118,12 @@ func (a Account) Validate() error {
 	}
 	if err := optional("account.connection_id", string(a.ConnectionID)); err != nil {
 		return err
+	}
+	if err := optional("account.number", a.Number); err != nil {
+		return err
+	}
+	if a.Number == "" && a.ExternalAccountID == "" {
+		return invalid("account", "requires a number or external account ID")
 	}
 	if a.ExternalAccountID != "" {
 		if a.ConnectionID == "" {
