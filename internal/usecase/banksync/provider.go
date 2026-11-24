@@ -1,6 +1,7 @@
 package banksync
 
 import (
+	"context"
 	"time"
 
 	"github.com/2inxs/openbanking-service/internal/domain"
@@ -28,4 +29,11 @@ type BankTransaction struct {
 	Description  string
 	MerchantName string
 	MCC          string
+}
+
+// BankClient - то, что синхронизации нужно от банка
+type BankClient interface {
+	Accounts(ctx context.Context) ([]BankAccount, error)
+	Balance(ctx context.Context, accountID string) (domain.BalanceSnapshot, error)
+	Transactions(ctx context.Context, accountID string, from, to time.Time) ([]BankTransaction, error)
 }
