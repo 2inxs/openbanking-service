@@ -8,6 +8,10 @@ import (
 	"github.com/2inxs/openbanking-service/internal/domain/money"
 )
 
+// maxConvertibleUnits ограничивает абсолютную величину суммы (10^24 минимальных единиц = 10^20 рублей),
+// защищая big.Int / big.Rat от CPU/Memory DoS при передаче сверхдлинных чисел.
+var maxConvertibleUnits = new(big.Int).Exp(big.NewInt(10), big.NewInt(24), nil)
+
 // ConversionResult содержит результат точной конвертации суммы через RUB.
 type ConversionResult struct {
 	Source            money.Money
@@ -46,6 +50,12 @@ func ConvertViaRUB(src money.Money, fromRate, toRate ExchangeRate, places int) (
 		return ConversionResult{}, money.ErrInvalidScale
 	}
 
+	absRat := new(big.Rat).Abs(src.Amount.Rat())
+	maxRat := new(big.Rat).SetInt(new(big.Int).Quo(maxConvertibleUnits, big.NewInt(10000)))
+	if absRat.Cmp(maxRat) > 0 {
+		return ConversionResult{}, fmt.Errorf("convert.source: %w: amount exceeds safe precision bound", money.ErrInvalidAmount)
+	}
+
 	effectiveDate := fromRate.RateDate
 	if !toRate.RateDate.IsZero() && (effectiveDate.IsZero() || toRate.RateDate.Before(effectiveDate)) {
 		effectiveDate = toRate.RateDate
@@ -67,9 +77,7 @@ func ConvertViaRUB(src money.Money, fromRate, toRate ExchangeRate, places int) (
 		}, nil
 	}
 
-	// crossRate = RUBPerUnit(from) / RUBPerUnit(to)
 	crossRate := new(big.Rat).Quo(new(big.Rat).Set(fromRate.RUBPerUnit), toRate.RUBPerUnit)
-	// targetRat = src.Amount * crossRate (без промежуточного округления в RUB)
 	targetRat := new(big.Rat).Mul(src.Amount.Rat(), crossRate)
 
 	targetAmount, err := money.FromRat(targetRat, places)

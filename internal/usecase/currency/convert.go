@@ -30,10 +30,10 @@ type ConvertResult struct {
 
 func (s *Service) Convert(ctx context.Context, req ConvertRequest) (ConvertResult, error) {
 	if err := req.Amount.Validate(); err != nil {
-		return ConvertResult{}, fmt.Errorf("%w: %v", ErrInvalidCurrency, err)
+		return ConvertResult{}, ErrInvalidCurrency
 	}
 	if err := req.To.Validate(); err != nil {
-		return ConvertResult{}, fmt.Errorf("%w: %v", ErrInvalidCurrency, err)
+		return ConvertResult{}, ErrInvalidCurrency
 	}
 	if req.Date != nil && req.Date.IsZero() {
 		return ConvertResult{}, fmt.Errorf("%w: conversion date must not be zero", domain.ErrInvalidModel)
@@ -47,14 +47,21 @@ func (s *Service) Convert(ctx context.Context, req ConvertRequest) (ConvertResul
 		places = *req.Places
 	}
 
+	nowMSK := s.nowFn().In(moscowLoc)
+	todayMSK := time.Date(nowMSK.Year(), nowMSK.Month(), nowMSK.Day(), 0, 0, 0, 0, time.UTC)
+
 	var normalizedDate *time.Time
 	if req.Date != nil {
-		d := time.Date(req.Date.Year(), req.Date.Month(), req.Date.Day(), 0, 0, 0, 0, time.UTC)
+		reqInMSK := req.Date.In(moscowLoc)
+		d := time.Date(reqInMSK.Year(), reqInMSK.Month(), reqInMSK.Day(), 0, 0, 0, 0, time.UTC)
+		if d.After(todayMSK) {
+			return ConvertResult{}, fmt.Errorf("%w: conversion date cannot be in the future", domain.ErrInvalidModel)
+		}
 		normalizedDate = &d
 	}
 
 	if req.Amount.Currency == req.To {
-		d := s.nowFn().UTC().Truncate(24 * time.Hour)
+		d := todayMSK
 		if normalizedDate != nil {
 			d = *normalizedDate
 		} else if s.cache != nil {
@@ -83,11 +90,7 @@ func (s *Service) Convert(ctx context.Context, req ConvertRequest) (ConvertResul
 		}, nil
 	}
 
-	fromRate, err := s.GetRate(ctx, req.Amount.Currency, normalizedDate)
-	if err != nil {
-		return ConvertResult{}, err
-	}
-	toRate, err := s.GetRate(ctx, req.To, normalizedDate)
+	fromRate, toRate, err := s.resolveConsistentRatePair(ctx, req.Amount.Currency, req.To, normalizedDate)
 	if err != nil {
 		return ConvertResult{}, err
 	}
@@ -107,4 +110,59 @@ func (s *Service) Convert(ctx context.Context, req ConvertRequest) (ConvertResul
 		ZeroAfterRounding: conv.ZeroAfterRounding,
 		ExactRate:         new(big.Rat).Set(conv.EffectiveRate),
 	}, nil
+}
+
+// resolveConsistentRatePair гарантирует, что оба курса в паре взяты на согласованную дату,
+// исключая рассогласование курсов при фоновом обновлении кеша между двумя вызовами GetRate.
+func (s *Service) resolveConsistentRatePair(ctx context.Context, from, to money.Currency, date *time.Time) (domain.ExchangeRate, domain.ExchangeRate, error) {
+	if date != nil {
+		fromRate, err := s.GetRate(ctx, from, date)
+		if err != nil {
+			return domain.ExchangeRate{}, domain.ExchangeRate{}, err
+		}
+		toRate, err := s.GetRate(ctx, to, date)
+		if err != nil {
+			return domain.ExchangeRate{}, domain.ExchangeRate{}, err
+		}
+		return fromRate, toRate, nil
+	}
+
+	if from == money.RUB {
+		toRate, err := s.GetRate(ctx, to, nil)
+		if err != nil {
+			return domain.ExchangeRate{}, domain.ExchangeRate{}, err
+		}
+		fromRate := domain.ExchangeRate{
+			Currency:   money.RUB,
+			RateDate:   toRate.RateDate,
+			RUBPerUnit: big.NewRat(1, 1),
+		}
+		return fromRate, toRate, nil
+	}
+
+	if to == money.RUB {
+		fromRate, err := s.GetRate(ctx, from, nil)
+		if err != nil {
+			return domain.ExchangeRate{}, domain.ExchangeRate{}, err
+		}
+		toRate := domain.ExchangeRate{
+			Currency:   money.RUB,
+			RateDate:   fromRate.RateDate,
+			RUBPerUnit: big.NewRat(1, 1),
+		}
+		return fromRate, toRate, nil
+	}
+
+	// Кросс-пара Foreign -> Foreign без явной даты: привязываем второй курс к дате первого,
+	// чтобы оба курса относились к одному и тому же снимку ЦБ РФ.
+	fromRate, err := s.GetRate(ctx, from, nil)
+	if err != nil {
+		return domain.ExchangeRate{}, domain.ExchangeRate{}, err
+	}
+	rateDay := fromRate.RateDate
+	toRate, err := s.GetRate(ctx, to, &rateDay)
+	if err != nil {
+		return domain.ExchangeRate{}, domain.ExchangeRate{}, err
+	}
+	return fromRate, toRate, nil
 }

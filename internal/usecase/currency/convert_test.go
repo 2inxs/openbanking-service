@@ -110,4 +110,23 @@ func TestServiceConvertDirectionsAndEdgeCases(t *testing.T) {
 	if err != nil || resTiny.Target.Amount.String() != "0.0000" || !resTiny.ZeroAfterRounding {
 		t.Fatalf("expected ZeroAfterRounding=true for 0.01 RUB -> USD (2 places), got err=%v res=%+v", err, resTiny)
 	}
+
+	// 9. Future date is rejected with domain.ErrInvalidModel
+	futureDate := time.Now().UTC().AddDate(1, 0, 0)
+	if _, err := svc.Convert(ctx, currency.ConvertRequest{
+		Amount: money.Money{Amount: amt100, Currency: "USD"},
+		To:     money.RUB,
+		Date:   &futureDate,
+	}); !errors.Is(err, domain.ErrInvalidModel) {
+		t.Fatalf("expected ErrInvalidModel for future date, got %v", err)
+	}
+
+	// 10. Excessive big.Int magnitude is rejected to prevent CPU/Memory DoS
+	hugeAmt, _ := money.Parse("1000000000000000000000.0000") // 10^21 > 10^20 limit
+	if _, err := svc.Convert(ctx, currency.ConvertRequest{
+		Amount: money.Money{Amount: hugeAmt, Currency: "USD"},
+		To:     money.RUB,
+	}); !errors.Is(err, money.ErrInvalidAmount) {
+		t.Fatalf("expected ErrInvalidAmount for huge amount DoS guard, got %v", err)
+	}
 }
