@@ -139,7 +139,6 @@ func (r *StatementImportRepository) ImportStream(
 		return nil
 	}
 
-	var importID string
 	var (
 		totalReceived int
 		chunkIndex    int
