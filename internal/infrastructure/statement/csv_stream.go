@@ -7,12 +7,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"unicode/utf8"
 
 	"github.com/2inxs/openbanking-service/internal/domain/money"
 	usecasestmt "github.com/2inxs/openbanking-service/internal/usecase/statement"
 )
 
-const streamReadBufferSize = 64 << 10 // 64 КБ
+const (
+	streamReadBufferSize = 64 << 10 // 64 КБ
+	maxVarchar255Runes   = 255
+)
 
 var _ usecasestmt.StreamParser = (*CSVParser)(nil)
 
@@ -30,9 +34,6 @@ func (p *CSVParser) WithMaxRows(maxRows int) *CSVParser {
 	return p
 }
 
-// ParseStream читает CSV-поток буферами по 64 КБ, валидирует строки на лету
-// и отправляет готовые чанки в канал chunks для параллельной обработки/записи в БД.
-// Канал chunks закрывается автоматически при завершении метода.
 func (p *CSVParser) ParseStream(ctx context.Context, r io.Reader, chunks chan<- usecasestmt.TransactionChunk) ([]usecasestmt.RowError, error) {
 	defer close(chunks)
 
@@ -68,7 +69,7 @@ func (p *CSVParser) ParseStream(ctx context.Context, r io.Reader, chunks chan<- 
 		return nil, fmt.Errorf("%w: %v", usecasestmt.ErrMalformedFile, err)
 	}
 	for i, col := range header {
-		if !isValidUTF8String(col) {
+		if !utf8.ValidString(col) {
 			return nil, fmt.Errorf("%w: column %d contains invalid UTF-8", usecasestmt.ErrInvalidHeader, i+1)
 		}
 	}
@@ -77,13 +78,20 @@ func (p *CSVParser) ParseStream(ctx context.Context, r io.Reader, chunks chan<- 
 	}
 
 	var (
-		accountNumber string
-		currency      money.Currency
-		totalRows     int
-		validRows     int
-		rowErrors     []usecasestmt.RowError
-		batch         = make([]usecasestmt.TransactionRow, 0, usecasestmt.DefaultChunkSize)
+		accountNumber  string
+		currency       money.Currency
+		validRows      int
+		totalRowErrors int
+		rowErrors      []usecasestmt.RowError
+		batch          = make([]usecasestmt.TransactionRow, 0, usecasestmt.DefaultChunkSize)
 	)
+
+	addRowError := func(row int, msg string) {
+		totalRowErrors++
+		if len(rowErrors) < usecasestmt.MaxCollectedRowErrors {
+			rowErrors = append(rowErrors, usecasestmt.RowError{Row: row, Message: msg})
+		}
+	}
 
 	flushBatch := func() error {
 		if len(batch) == 0 {
@@ -128,26 +136,26 @@ func (p *CSVParser) ParseStream(ctx context.Context, r io.Reader, chunks chan<- 
 			line = 1
 		}
 
-		totalRows++
-		if totalRows > p.maxRows {
+		if validRows+totalRowErrors >= p.maxRows {
 			return rowErrors, fmt.Errorf("%w: max %d rows allowed", usecasestmt.ErrTooManyRows, p.maxRows)
 		}
 
 		if !isValidUTF8Record(record) {
-			if len(rowErrors) < usecasestmt.MaxCollectedRowErrors {
-				rowErrors = append(rowErrors, usecasestmt.RowError{
-					Row:     line,
-					Message: "row contains invalid UTF-8 sequence",
-				})
-			}
+			addRowError(line, "row contains invalid UTF-8 sequence")
 			continue
 		}
 
 		tx, rowErr := normalizeRow(line, record, &accountNumber, &currency, nil)
 		if rowErr != nil {
-			if len(rowErrors) < usecasestmt.MaxCollectedRowErrors {
-				rowErrors = append(rowErrors, *rowErr)
-			}
+			addRowError(rowErr.Row, rowErr.Message)
+			continue
+		}
+		if utf8.RuneCountInString(tx.ExternalID) > maxVarchar255Runes {
+			addRowError(line, "external_id exceeds 255 characters")
+			continue
+		}
+		if utf8.RuneCountInString(tx.CounterpartyName) > maxVarchar255Runes {
+			addRowError(line, "counterparty exceeds 255 characters")
 			continue
 		}
 
@@ -160,12 +168,12 @@ func (p *CSVParser) ParseStream(ctx context.Context, r io.Reader, chunks chan<- 
 		}
 	}
 
-	if validRows == 0 && len(rowErrors) == 0 {
+	if validRows == 0 && totalRowErrors == 0 {
 		return nil, usecasestmt.ErrEmptyStatement
 	}
 
-	if len(rowErrors) > 0 {
-		return rowErrors, fmt.Errorf("%w: %d invalid rows", usecasestmt.ErrValidationFailed, len(rowErrors))
+	if totalRowErrors > 0 {
+		return rowErrors, fmt.Errorf("%w: %d invalid rows", usecasestmt.ErrValidationFailed, totalRowErrors)
 	}
 
 	if err := flushBatch(); err != nil {
@@ -173,13 +181,4 @@ func (p *CSVParser) ParseStream(ctx context.Context, r io.Reader, chunks chan<- 
 	}
 
 	return nil, nil
-}
-
-func isValidUTF8String(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] >= 0x80 {
-			return isValidUTF8Record([]string{s})
-		}
-	}
-	return true
 }

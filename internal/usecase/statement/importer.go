@@ -66,18 +66,20 @@ func NewImportService(csvParser, xlsxParser Parser, repo ImportRepository) *Impo
 	}
 }
 
-// Import запускает двупоточный конвейер (Producer: парсер файла -> канал чанков,
-// Consumer: потоковая загрузка в PostgreSQL через CopyFrom) с полной атомарностью.
 func (s *ImportService) Import(ctx context.Context, cmd ImportCommand) (ImportResult, error) {
+	if strings.TrimSpace(string(cmd.AccountID)) == "" {
+		return ImportResult{}, ErrAccountNotFound
+	}
 	if cmd.Reader == nil {
 		return ImportResult{}, ErrEmptyStatement
 	}
-	target, err := s.repo.GetTargetAccount(ctx, cmd.AccountID)
+
+	parser, err := s.selectParser(cmd.Format, cmd.FileName)
 	if err != nil {
 		return ImportResult{}, err
 	}
 
-	parser, err := s.selectParser(cmd.Format, cmd.FileName)
+	target, err := s.repo.GetTargetAccount(ctx, cmd.AccountID)
 	if err != nil {
 		return ImportResult{}, err
 	}
@@ -96,7 +98,6 @@ func (s *ImportService) Import(ctx context.Context, cmd ImportCommand) (ImportRe
 		prodErr   error
 	)
 
-	// Горутина 1 (Producer): потоково читает CSV (или XLSX) и отправляет чанки в канал.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -104,7 +105,6 @@ func (s *ImportService) Import(ctx context.Context, cmd ImportCommand) (ImportRe
 			rowErrors, prodErr = sp.ParseStream(streamCtx, teeReader, chunks)
 			return
 		}
-		// Fallback для не-потокового парсера (XLSX): разбираем и режем на чанки.
 		defer close(chunks)
 		parsed, err := parser.Parse(teeReader)
 		rowErrors = parsed.RowErrors
@@ -130,16 +130,17 @@ func (s *ImportService) Import(ctx context.Context, cmd ImportCommand) (ImportRe
 		}
 	}()
 
-	// Горутина 2 (Consumer): параллельно принимает чанки из канала и грузит в PostgreSQL через CopyFrom.
 	res, repoErr := s.repo.ImportStream(streamCtx, target, cmd.FileName, chunks, func() (string, []RowError, error) {
 		wg.Wait()
 		return hex.EncodeToString(hasher.Sum(nil)), rowErrors, prodErr
 	})
 
-	// На случай досрочного выхода Consumer отменяем Producer и ждём завершения горутины.
 	cancel()
 	wg.Wait()
 
+	if repoErr != nil && !errors.Is(repoErr, context.Canceled) {
+		return res, repoErr
+	}
 	if prodErr != nil {
 		res.RowErrors = rowErrors
 		return res, prodErr

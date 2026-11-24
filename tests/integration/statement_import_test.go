@@ -161,4 +161,39 @@ func TestStreamStatementImportCopyFromIdempotencyAndAtomicity(t *testing.T) {
 	if dbCount != totalRows {
 		t.Fatalf("atomicity violated: expected %d rows after rollback, got %d", totalRows, dbCount)
 	}
+	// 4. Пустой или несуществующий AccountID возвращает ErrAccountNotFound.
+	if _, err := svc.Import(ctx, usecasestmt.ImportCommand{
+		AccountID: "",
+		FileName:  "business_nov.csv",
+		Reader:    strings.NewReader(payload),
+	}); !errors.Is(err, usecasestmt.ErrAccountNotFound) {
+		t.Fatalf("expected ErrAccountNotFound for empty accountID, got %v", err)
+	}
+	if _, err := svc.Import(ctx, usecasestmt.ImportCommand{
+		AccountID: "not-a-uuid",
+		FileName:  "business_nov.csv",
+		Reader:    strings.NewReader(payload),
+	}); !errors.Is(err, usecasestmt.ErrAccountNotFound) {
+		t.Fatalf("expected ErrAccountNotFound for malformed UUID, got %v", err)
+	}
+	// 5. Несовпадение номера счёта в выписке возвращает ErrAccountNumberMismatch.
+	wrongAcc := "account_number;booked_at;amount;currency;external_id;description;counterparty\n" +
+		"40817810000000009999;2026-11-20;-10.00;RUB;op-wrong-acc;Тест;Магазин\n"
+	if _, err := svc.Import(ctx, usecasestmt.ImportCommand{
+		AccountID: accountID,
+		FileName:  "wrong_acc.csv",
+		Reader:    strings.NewReader(wrongAcc),
+	}); !errors.Is(err, usecasestmt.ErrAccountNumberMismatch) {
+		t.Fatalf("expected ErrAccountNumberMismatch, got %v", err)
+	}
+	// 6. Несовпадение валюты выписки с валютой счёта возвращает ErrAccountCurrencyMismatch.
+	wrongCurr := "account_number;booked_at;amount;currency;external_id;description;counterparty\n" +
+		"40817810000000000001;2026-11-20;-10.00;USD;op-wrong-curr;Тест;Магазин\n"
+	if _, err := svc.Import(ctx, usecasestmt.ImportCommand{
+		AccountID: accountID,
+		FileName:  "wrong_curr.csv",
+		Reader:    strings.NewReader(wrongCurr),
+	}); !errors.Is(err, usecasestmt.ErrAccountCurrencyMismatch) {
+		t.Fatalf("expected ErrAccountCurrencyMismatch, got %v", err)
+	}
 }
