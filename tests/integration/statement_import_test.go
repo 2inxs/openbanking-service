@@ -45,15 +45,15 @@ CREATE TABLE %s.transactions (LIKE public.transactions INCLUDING ALL);
 	}
 
 	seedSQL := fmt.Sprintf(`
-INSERT INTO %s.users (id, email, password_hash, full_name)
+INSERT INTO %s.users (id, email, password_hash, display_name)
 VALUES ('%s'::uuid, 'import@example.com', 'hash', 'Test User');
 INSERT INTO %s.banks (id, code, name)
 VALUES ('%s'::uuid, 'mockbank', 'Mock Bank');
 INSERT INTO %s.bank_connections (id, user_id, bank_id, status)
 VALUES ('%s'::uuid, '%s'::uuid, '%s'::uuid, 'active');
-INSERT INTO %s.accounts (id, user_id, bank_connection_id, external_account_id, account_number, name, type, status, currency_code)
-VALUES ('%s'::uuid, '%s'::uuid, '%s'::uuid, 'ext-acc-1', '40817810000000000001', 'Основной счёт', 'checking', 'active', 'RUB');
-`, schema, userID, schema, bankID, schema, connID, userID, bankID, schema, accountID, userID, connID)
+INSERT INTO %s.accounts (id, user_id, bank_id, bank_connection_id, external_account_id, account_number, name, type, status, currency_code)
+VALUES ('%s'::uuid, '%s'::uuid, '%s'::uuid, '%s'::uuid, 'ext-acc-1', '40817810000000000001', 'Основной счёт', 'checking', 'active', 'RUB');
+`, schema, userID, schema, bankID, schema, connID, userID, bankID, schema, accountID, userID, bankID, connID)
 
 	if _, err := adminPool.Exec(ctx, seedSQL); err != nil {
 		t.Fatalf("seed isolated schema %s: %v", schema, err)
