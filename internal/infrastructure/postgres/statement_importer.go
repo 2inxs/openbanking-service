@@ -70,7 +70,7 @@ func (r *StatementImportRepository) GetTargetAccount(ctx context.Context, userID
 	if err != nil {
 		return usecasestmt.ImportTargetAccount{}, repositoryError(err, usecasestmt.ErrAccountNotFound, domain.ErrInvalidModel)
 	}
-	if isArchived || status == string(domain.AccountClosed) {
+	if isArchived || status == "closed" {
 		return usecasestmt.ImportTargetAccount{}, fmt.Errorf("%w: target account is closed or archived", domain.ErrInvalidModel)
 	}
 	var number string
