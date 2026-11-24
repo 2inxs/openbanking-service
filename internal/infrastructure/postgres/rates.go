@@ -4,7 +4,6 @@ import (
 	"context"
 	"math/big"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/2inxs/openbanking-service/internal/domain"
