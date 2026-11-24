@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,26 @@ var (
 	ErrAccountCurrencyMismatch = errors.New("statement: statement currency does not match target account")
 )
 
+type ctxLoggerKey struct{}
+
+// WithLoggerContext кладёт обогащённый *slog.Logger в контекст для сквозной трассировки слоёв.
+func WithLoggerContext(ctx context.Context, l *slog.Logger) context.Context {
+	if l == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxLoggerKey{}, l)
+}
+
+// LoggerFromContext извлекает логгер трассировки из контекста (или возвращает slog.Default()).
+func LoggerFromContext(ctx context.Context) *slog.Logger {
+	if ctx != nil {
+		if l, ok := ctx.Value(ctxLoggerKey{}).(*slog.Logger); ok && l != nil {
+			return l
+		}
+	}
+	return slog.Default()
+}
+
 type ImportTargetAccount struct {
 	ID            domain.AccountID
 	AccountNumber string
@@ -32,7 +53,7 @@ type ImportCommand struct {
 	AccountID domain.AccountID
 	FileName  string
 	Format    string // "csv" или "xlsx"
-	TraceID   string // опциональный request_id для трассировки в логах
+	TraceID   string // опциональный request_id; если пуст — ищется в ctx
 	Reader    io.Reader
 }
 
@@ -78,13 +99,49 @@ func (s *ImportService) WithLogger(logger *slog.Logger) *ImportService {
 	return s
 }
 
+func resolveTraceID(ctx context.Context, explicit string) string {
+	if id := strings.TrimSpace(explicit); id != "" {
+		return id
+	}
+	if ctx == nil {
+		return ""
+	}
+	for _, key := range []string{"request_id", "trace_id", "X-Request-ID"} {
+		if v, ok := ctx.Value(key).(string); ok && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+func sanitizeLogFileName(name string) string {
+	clean := filepath.Base(strings.TrimSpace(name))
+	if clean == "." || clean == string(filepath.Separator) {
+		return ""
+	}
+	clean = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, clean)
+	if len(clean) > 255 {
+		clean = clean[:255]
+	}
+	return clean
+}
+
 func (s *ImportService) Import(ctx context.Context, cmd ImportCommand) (ImportResult, error) {
 	startedAt := time.Now()
+	traceID := resolveTraceID(ctx, cmd.TraceID)
+	safeFileName := sanitizeLogFileName(cmd.FileName)
+
 	log := s.logger.With(
-		slog.String("trace_id", cmd.TraceID),
+		slog.String("trace_id", traceID),
 		slog.String("account_id", string(cmd.AccountID)),
-		slog.String("file_name", cmd.FileName),
+		slog.String("file_name", safeFileName),
 	)
+	tracedCtx := WithLoggerContext(ctx, log)
 
 	if strings.TrimSpace(string(cmd.AccountID)) == "" {
 		return ImportResult{}, ErrAccountNotFound
@@ -93,19 +150,19 @@ func (s *ImportService) Import(ctx context.Context, cmd ImportCommand) (ImportRe
 		return ImportResult{}, ErrEmptyStatement
 	}
 
-	parser, format, err := s.selectParser(cmd.Format, cmd.FileName)
+	parser, format, err := s.selectParser(cmd.Format, safeFileName)
 	if err != nil {
-		log.WarnContext(ctx, "statement import rejected: unsupported format", slog.String("error", err.Error()))
+		log.WarnContext(tracedCtx, "statement import rejected: unsupported format", slog.String("error", err.Error()))
 		return ImportResult{}, err
 	}
 
-	target, err := s.repo.GetTargetAccount(ctx, cmd.AccountID)
+	target, err := s.repo.GetTargetAccount(tracedCtx, cmd.AccountID)
 	if err != nil {
-		log.WarnContext(ctx, "statement import failed: target account lookup", slog.String("error", err.Error()))
+		log.WarnContext(tracedCtx, "statement import failed: target account lookup", slog.String("error", err.Error()))
 		return ImportResult{}, err
 	}
 
-	log.InfoContext(ctx, "statement import started",
+	log.InfoContext(tracedCtx, "statement import started",
 		slog.String("format", format),
 		slog.String("currency", string(target.Currency)),
 	)
@@ -113,7 +170,7 @@ func (s *ImportService) Import(ctx context.Context, cmd ImportCommand) (ImportRe
 	hasher := sha256.New()
 	teeReader := io.TeeReader(cmd.Reader, hasher)
 
-	streamCtx, cancel := context.WithCancel(ctx)
+	streamCtx, cancel := context.WithCancel(tracedCtx)
 	defer cancel()
 
 	chunks := make(chan TransactionChunk, 8)
@@ -157,7 +214,7 @@ func (s *ImportService) Import(ctx context.Context, cmd ImportCommand) (ImportRe
 	}()
 
 	var computedSHA string
-	res, repoErr := s.repo.ImportStream(streamCtx, target, cmd.FileName, chunks, func() (string, []RowError, error) {
+	res, repoErr := s.repo.ImportStream(streamCtx, target, safeFileName, chunks, func() (string, []RowError, error) {
 		wg.Wait()
 		computedSHA = hex.EncodeToString(hasher.Sum(nil))
 		return computedSHA, rowErrors, prodErr
@@ -169,7 +226,7 @@ func (s *ImportService) Import(ctx context.Context, cmd ImportCommand) (ImportRe
 	durationMs := time.Since(startedAt).Milliseconds()
 
 	if repoErr != nil && !errors.Is(repoErr, context.Canceled) {
-		log.WarnContext(ctx, "statement import failed in repository",
+		log.WarnContext(tracedCtx, "statement import failed in repository",
 			slog.Int64("duration_ms", durationMs),
 			slog.String("error", repoErr.Error()),
 		)
@@ -177,7 +234,7 @@ func (s *ImportService) Import(ctx context.Context, cmd ImportCommand) (ImportRe
 	}
 	if prodErr != nil {
 		res.RowErrors = rowErrors
-		log.WarnContext(ctx, "statement import failed during parsing",
+		log.WarnContext(tracedCtx, "statement import failed during parsing",
 			slog.Int("error_count", len(rowErrors)),
 			slog.Int64("duration_ms", durationMs),
 			slog.String("error", prodErr.Error()),
@@ -185,14 +242,14 @@ func (s *ImportService) Import(ctx context.Context, cmd ImportCommand) (ImportRe
 		return res, prodErr
 	}
 	if repoErr != nil {
-		log.WarnContext(ctx, "statement import canceled",
+		log.WarnContext(tracedCtx, "statement import canceled",
 			slog.Int64("duration_ms", durationMs),
 			slog.String("error", repoErr.Error()),
 		)
 		return res, repoErr
 	}
 
-	log.InfoContext(ctx, "statement import completed",
+	log.InfoContext(tracedCtx, "statement import completed",
 		slog.String("import_id", string(res.ImportID)),
 		slog.String("file_sha256", computedSHA),
 		slog.Int("imported_count", res.ImportedCount),
