@@ -229,10 +229,7 @@ func TestCBRClientRefreshSavesSupportedCurrenciesToInitialSchemaAndWarmsUp(t *te
 	}))
 	defer srv.Close()
 
-	client, err := cbr.NewClient(cbr.WithBaseURL(srv.URL))
-	if err != nil {
-		t.Fatal(err)
-	}
+	client := cbr.NewClient(cbr.WithEndpoint(srv.URL))
 
 	rateCache := cache.NewRateCache()
 	svc := currency.NewService(client, repo).WithCache(rateCache)
