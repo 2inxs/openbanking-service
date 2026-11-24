@@ -97,3 +97,15 @@ func TestCSVParserParseStreamCancelsCleanlyOnConsumerError(t *testing.T) {
 		t.Fatalf("expected context.Canceled after consumer abort, got %v", err)
 	}
 }
+
+func TestCSVParserParseStreamRejectsGiantSingleLineOver64KB(t *testing.T) {
+	giantDesc := strings.Repeat("A", 70*1024) // 70 КБ в одной строке
+	raw := "account_number;booked_at;amount;currency;external_id;description;counterparty\n" +
+		"40817810000000000001;2026-11-20;-10.50;RUB;op-1;" + giantDesc + ";Магазин\n"
+
+	chunks := make(chan usecasestmt.TransactionChunk, 2)
+	_, err := statement.NewCSVParser().ParseStream(context.Background(), strings.NewReader(raw), chunks)
+	if !errors.Is(err, usecasestmt.ErrMalformedFile) {
+		t.Fatalf("expected ErrMalformedFile on line > 64KB, got %v", err)
+	}
+}

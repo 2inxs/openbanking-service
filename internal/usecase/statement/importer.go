@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/2inxs/openbanking-service/internal/domain"
 	"github.com/2inxs/openbanking-service/internal/domain/money"
@@ -30,6 +32,7 @@ type ImportCommand struct {
 	AccountID domain.AccountID
 	FileName  string
 	Format    string // "csv" или "xlsx"
+	TraceID   string // опциональный request_id для трассировки в логах
 	Reader    io.Reader
 }
 
@@ -56,6 +59,7 @@ type ImportService struct {
 	csvParser  Parser
 	xlsxParser Parser
 	repo       ImportRepository
+	logger     *slog.Logger
 }
 
 func NewImportService(csvParser, xlsxParser Parser, repo ImportRepository) *ImportService {
@@ -63,10 +67,25 @@ func NewImportService(csvParser, xlsxParser Parser, repo ImportRepository) *Impo
 		csvParser:  csvParser,
 		xlsxParser: xlsxParser,
 		repo:       repo,
+		logger:     slog.Default(),
 	}
 }
 
+func (s *ImportService) WithLogger(logger *slog.Logger) *ImportService {
+	if logger != nil {
+		s.logger = logger
+	}
+	return s
+}
+
 func (s *ImportService) Import(ctx context.Context, cmd ImportCommand) (ImportResult, error) {
+	startedAt := time.Now()
+	log := s.logger.With(
+		slog.String("trace_id", cmd.TraceID),
+		slog.String("account_id", string(cmd.AccountID)),
+		slog.String("file_name", cmd.FileName),
+	)
+
 	if strings.TrimSpace(string(cmd.AccountID)) == "" {
 		return ImportResult{}, ErrAccountNotFound
 	}
@@ -74,15 +93,22 @@ func (s *ImportService) Import(ctx context.Context, cmd ImportCommand) (ImportRe
 		return ImportResult{}, ErrEmptyStatement
 	}
 
-	parser, err := s.selectParser(cmd.Format, cmd.FileName)
+	parser, format, err := s.selectParser(cmd.Format, cmd.FileName)
 	if err != nil {
+		log.WarnContext(ctx, "statement import rejected: unsupported format", slog.String("error", err.Error()))
 		return ImportResult{}, err
 	}
 
 	target, err := s.repo.GetTargetAccount(ctx, cmd.AccountID)
 	if err != nil {
+		log.WarnContext(ctx, "statement import failed: target account lookup", slog.String("error", err.Error()))
 		return ImportResult{}, err
 	}
+
+	log.InfoContext(ctx, "statement import started",
+		slog.String("format", format),
+		slog.String("currency", string(target.Currency)),
+	)
 
 	hasher := sha256.New()
 	teeReader := io.TeeReader(cmd.Reader, hasher)
@@ -130,28 +156,53 @@ func (s *ImportService) Import(ctx context.Context, cmd ImportCommand) (ImportRe
 		}
 	}()
 
+	var computedSHA string
 	res, repoErr := s.repo.ImportStream(streamCtx, target, cmd.FileName, chunks, func() (string, []RowError, error) {
 		wg.Wait()
-		return hex.EncodeToString(hasher.Sum(nil)), rowErrors, prodErr
+		computedSHA = hex.EncodeToString(hasher.Sum(nil))
+		return computedSHA, rowErrors, prodErr
 	})
 
 	cancel()
 	wg.Wait()
 
+	durationMs := time.Since(startedAt).Milliseconds()
+
 	if repoErr != nil && !errors.Is(repoErr, context.Canceled) {
+		log.WarnContext(ctx, "statement import failed in repository",
+			slog.Int64("duration_ms", durationMs),
+			slog.String("error", repoErr.Error()),
+		)
 		return res, repoErr
 	}
 	if prodErr != nil {
 		res.RowErrors = rowErrors
+		log.WarnContext(ctx, "statement import failed during parsing",
+			slog.Int("error_count", len(rowErrors)),
+			slog.Int64("duration_ms", durationMs),
+			slog.String("error", prodErr.Error()),
+		)
 		return res, prodErr
 	}
 	if repoErr != nil {
+		log.WarnContext(ctx, "statement import canceled",
+			slog.Int64("duration_ms", durationMs),
+			slog.String("error", repoErr.Error()),
+		)
 		return res, repoErr
 	}
+
+	log.InfoContext(ctx, "statement import completed",
+		slog.String("import_id", string(res.ImportID)),
+		slog.String("file_sha256", computedSHA),
+		slog.Int("imported_count", res.ImportedCount),
+		slog.Int("skipped_count", res.SkippedCount),
+		slog.Int64("duration_ms", durationMs),
+	)
 	return res, nil
 }
 
-func (s *ImportService) selectParser(format, fileName string) (Parser, error) {
+func (s *ImportService) selectParser(format, fileName string) (Parser, string, error) {
 	f := strings.ToLower(strings.TrimSpace(format))
 	if f == "" {
 		lowerName := strings.ToLower(strings.TrimSpace(fileName))
@@ -164,10 +215,10 @@ func (s *ImportService) selectParser(format, fileName string) (Parser, error) {
 	}
 	switch f {
 	case "csv":
-		return s.csvParser, nil
+		return s.csvParser, f, nil
 	case "xlsx":
-		return s.xlsxParser, nil
+		return s.xlsxParser, f, nil
 	default:
-		return nil, fmt.Errorf("%w: unsupported statement format %q", ErrMalformedFile, format)
+		return nil, "", fmt.Errorf("%w: unsupported statement format %q", ErrMalformedFile, format)
 	}
 }

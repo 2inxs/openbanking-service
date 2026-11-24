@@ -2,6 +2,7 @@ package statement
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/csv"
 	"errors"
@@ -14,9 +15,12 @@ import (
 )
 
 const (
-	streamReadBufferSize = 64 << 10 // 64 КБ
+	streamReadBufferSize = 64 << 10 // 64 КБ буфер чтения
+	maxCSVLineBytes      = 64 << 10 // 64 КБ максимум на одну строку выписки (защита от OOM)
 	maxVarchar255Runes   = 255
 )
+
+var ErrLineTooLong = errors.New("statement: single CSV line exceeds 64 KB limit")
 
 var _ usecasestmt.StreamParser = (*CSVParser)(nil)
 
@@ -45,7 +49,8 @@ func (p *CSVParser) ParseStream(ctx context.Context, r io.Reader, chunks chan<- 
 	}
 
 	limited := &limitedReader{r: r, remaining: p.maxFileSize}
-	br := bufio.NewReaderSize(limited, streamReadBufferSize)
+	lineGuarded := &maxLineBytesReader{r: limited, maxLine: maxCSVLineBytes}
+	br := bufio.NewReaderSize(lineGuarded, streamReadBufferSize)
 	if err := stripUTF8BOM(br); err != nil {
 		if errors.Is(err, usecasestmt.ErrFileTooLarge) {
 			return nil, err
@@ -62,6 +67,9 @@ func (p *CSVParser) ParseStream(ctx context.Context, r io.Reader, chunks chan<- 
 	if err != nil {
 		if limited.exceeded || errors.Is(err, usecasestmt.ErrFileTooLarge) {
 			return nil, usecasestmt.ErrFileTooLarge
+		}
+		if lineGuarded.exceeded || errors.Is(err, ErrLineTooLong) {
+			return nil, fmt.Errorf("%w: %v", usecasestmt.ErrMalformedFile, ErrLineTooLong)
 		}
 		if errors.Is(err, io.EOF) {
 			return nil, usecasestmt.ErrEmptyStatement
@@ -119,6 +127,9 @@ func (p *CSVParser) ParseStream(ctx context.Context, r io.Reader, chunks chan<- 
 		record, err := reader.Read()
 		if limited.exceeded || errors.Is(err, usecasestmt.ErrFileTooLarge) {
 			return rowErrors, usecasestmt.ErrFileTooLarge
+		}
+		if lineGuarded.exceeded || errors.Is(err, ErrLineTooLong) {
+			return rowErrors, fmt.Errorf("%w: %v", usecasestmt.ErrMalformedFile, ErrLineTooLong)
 		}
 		if errors.Is(err, io.EOF) {
 			break
@@ -181,4 +192,38 @@ func (p *CSVParser) ParseStream(ctx context.Context, r io.Reader, chunks chan<- 
 	}
 
 	return nil, nil
+}
+
+type maxLineBytesReader struct {
+	r           io.Reader
+	maxLine     int
+	currentLine int
+	exceeded    bool
+}
+
+func (m *maxLineBytesReader) Read(p []byte) (int, error) {
+	if m.exceeded {
+		return 0, ErrLineTooLong
+	}
+	n, err := m.r.Read(p)
+	chunk := p[:n]
+	for len(chunk) > 0 {
+		nl := bytes.IndexByte(chunk, '\n')
+		if nl == -1 {
+			m.currentLine += len(chunk)
+			if m.currentLine > m.maxLine {
+				m.exceeded = true
+				return n, ErrLineTooLong
+			}
+			break
+		}
+		m.currentLine += nl
+		if m.currentLine > m.maxLine {
+			m.exceeded = true
+			return n, ErrLineTooLong
+		}
+		m.currentLine = 0
+		chunk = chunk[nl+1:]
+	}
+	return n, err
 }
