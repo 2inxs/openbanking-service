@@ -86,15 +86,24 @@ func TestImportServiceRecordsTechLogsAndAuditEvent(t *testing.T) {
 	if len(lines) < 2 {
 		t.Fatalf("expected at least 2 structured log records, got %d", len(lines))
 	}
-	var lastRecord map[string]any
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &lastRecord); err != nil {
-		t.Fatalf("invalid JSON log line: %v", err)
+	var completedRecord map[string]any
+	for _, line := range lines {
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("invalid JSON log line: %v", err)
+		}
+		if rec["msg"] == "statement import completed" {
+			completedRecord = rec
+		}
 	}
-	if lastRecord["request_id"] != "req-trace-99" || lastRecord["user_id"] != "user-uuid-7" || lastRecord["job"] != "statement_import" {
-		t.Fatalf("missing correlation fields in techlogger output: %+v", lastRecord)
+	if completedRecord == nil {
+		t.Fatalf("expected 'statement import completed' record in logs, got:\n%s", logBuf.String())
 	}
-	if lastRecord["file_name"] != "november.csv" {
-		t.Fatalf("expected sanitized base file_name, got %v", lastRecord["file_name"])
+	if completedRecord["request_id"] != "req-trace-99" || completedRecord["user_id"] != "user-uuid-7" || completedRecord["job"] != "statement_import" {
+		t.Fatalf("missing correlation fields in techlogger output: %+v", completedRecord)
+	}
+	if completedRecord["file_name"] != "november.csv" {
+		t.Fatalf("expected sanitized base file_name, got %v", completedRecord["file_name"])
 	}
 	// 2. Проверяем запись бизнес-аудита AuditActionStatementImported.
 	events := auditRepo.ListByUser("user-uuid-7")
