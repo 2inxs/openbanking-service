@@ -80,6 +80,9 @@ func ConvertViaRUB(src money.Money, fromRate, toRate ExchangeRate, places int) (
 	crossRate := new(big.Rat).Quo(new(big.Rat).Set(fromRate.RUBPerUnit), toRate.RUBPerUnit)
 	targetRat := new(big.Rat).Mul(src.Amount.Rat(), crossRate)
 
+	if new(big.Rat).Abs(targetRat).Cmp(maxRat) > 0 {
+		return ConversionResult{}, fmt.Errorf("convert.target: %w: converted amount exceeds safe precision bound", money.ErrInvalidAmount)
+	}
 	targetAmount, err := money.FromRat(targetRat, places)
 	if err != nil {
 		return ConversionResult{}, err
