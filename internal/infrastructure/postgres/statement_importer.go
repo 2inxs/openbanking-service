@@ -208,6 +208,36 @@ func (r *StatementImportRepository) ImportStream(
 		return usecasestmt.ImportResult{}, usecasestmt.ErrEmptyStatement
 	}
 
+	// Проверяем идемпотентность по уникальному индексу statement_imports_file_uq (account_id, file_sha256):
+	// если этот файл уже был успешно импортирован ранее, возвращаем существующий ImportID без повторной вставки.
+	var (
+		existingImportID string
+		prevImported     int
+		prevSkipped      int
+	)
+	checkDupSQL := "SELECT id::text, imported_count, skipped_count FROM statement_imports " +
+		"WHERE account_id = $1::uuid AND file_sha256 = $2 AND status <> 'failed' LIMIT 1"
+	err := tx.QueryRow(ctx, checkDupSQL, string(target.ID), fileSHA256).Scan(&existingImportID, &prevImported, &prevSkipped)
+	if err == nil {
+		if commitErr := tx.Commit(ctx); commitErr != nil {
+			return usecasestmt.ImportResult{}, repositoryError(commitErr, usecasestmt.ErrAccountNotFound, domain.ErrInvalidModel)
+		}
+		log.InfoContext(ctx, "statement import deduplicated by file_sha256",
+			slog.String("import_id", existingImportID),
+			slog.String("file_sha256", fileSHA256),
+			slog.Int("skipped_count", totalReceived),
+		)
+		return usecasestmt.ImportResult{
+			ImportID:      domain.StatementImportID(existingImportID),
+			AccountID:     target.ID,
+			ImportedCount: 0,
+			SkippedCount:  totalReceived,
+		}, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return usecasestmt.ImportResult{}, repositoryError(err, usecasestmt.ErrAccountNotFound, domain.ErrInvalidModel)
+	}
+
 	safeFileName := strings.TrimSpace(fileName)
 	if safeFileName == "" {
 		safeFileName = "statement.csv"
@@ -219,7 +249,7 @@ func (r *StatementImportRepository) ImportStream(
 	var importID string
 	insertImportSQL := "INSERT INTO statement_imports (account_id, file_name, file_sha256, status) " +
 		"VALUES ($1::uuid, $2, $3, 'processing') RETURNING id::text"
-	err := tx.QueryRow(ctx, insertImportSQL, string(target.ID), safeFileName, fileSHA256).Scan(&importID)
+	err = tx.QueryRow(ctx, insertImportSQL, string(target.ID), safeFileName, fileSHA256).Scan(&importID)
 	if err != nil {
 		return usecasestmt.ImportResult{}, repositoryError(err, usecasestmt.ErrAccountNotFound, domain.ErrInvalidModel)
 	}
@@ -228,10 +258,14 @@ func (r *StatementImportRepository) ImportStream(
 	mergeSQL := "INSERT INTO transactions (" +
 		"account_id, statement_import_id, external_transaction_id, source, status, " +
 		"amount, currency_code, occurred_at, booked_at, description, counterparty_name, deduplication_key" +
-		") SELECT DISTINCT ON (deduplication_key) " +
-		"$1::uuid, $2::uuid, external_transaction_id, 'statement', 'booked', " +
-		"amount, currency_code, occurred_at, booked_at, description, counterparty_name, deduplication_key " +
-		"FROM tmp_statement_tx ORDER BY deduplication_key " +
+		") SELECT DISTINCT ON (tmp.deduplication_key) " +
+		"$1::uuid, $2::uuid, tmp.external_transaction_id, 'statement', 'booked', " +
+		"tmp.amount, tmp.currency_code, tmp.occurred_at, tmp.booked_at, tmp.description, tmp.counterparty_name, tmp.deduplication_key " +
+		"FROM tmp_statement_tx tmp " +
+		"WHERE tmp.external_transaction_id IS NULL OR NOT EXISTS (" +
+		"SELECT 1 FROM transactions ex WHERE ex.account_id = $1::uuid AND ex.external_transaction_id = tmp.external_transaction_id" +
+		") " +
+		"ORDER BY tmp.deduplication_key " +
 		"ON CONFLICT (account_id, deduplication_key) DO NOTHING"
 	tag, err := tx.Exec(ctx, mergeSQL, string(target.ID), importID)
 	if err != nil {
@@ -290,5 +324,3 @@ func computeStatementDedupKey(accountID domain.AccountID, row usecasestmt.Transa
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|occ|%d", base, occurrences[base])))
 	return hex.EncodeToString(sum[:])
 }
-
-var _ = errors.Is
