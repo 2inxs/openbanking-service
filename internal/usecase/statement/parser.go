@@ -1,6 +1,7 @@
 package statement
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -10,14 +11,16 @@ import (
 )
 
 const (
-	MaxFileSize = 10 << 20 // 10 МБ
-	MaxRows     = 100_000
+	MaxFileSize           = 10 << 20 // 10 МБ по умолчанию (переопределяется в парсере)
+	MaxRows               = 100_000
+	DefaultChunkSize      = 1000
+	MaxCollectedRowErrors = 100
 )
 
 var (
 	ErrEmptyStatement   = errors.New("statement: file has no transactions")
 	ErrInvalidHeader    = errors.New("statement: invalid statement header")
-	ErrFileTooLarge     = errors.New("statement: file size exceeds 10 MB limit")
+	ErrFileTooLarge     = errors.New("statement: file size exceeds limit")
 	ErrTooManyRows      = errors.New("statement: row limit exceeded")
 	ErrMalformedFile    = errors.New("statement: malformed file structure")
 	ErrValidationFailed = errors.New("statement: one or more rows are invalid")
@@ -41,6 +44,12 @@ type TransactionRow struct {
 	CounterpartyName string
 }
 
+type TransactionChunk struct {
+	AccountNumber string
+	Currency      money.Currency
+	Rows          []TransactionRow
+}
+
 type ParsedStatement struct {
 	AccountNumber string
 	Currency      money.Currency
@@ -50,4 +59,8 @@ type ParsedStatement struct {
 
 type Parser interface {
 	Parse(r io.Reader) (ParsedStatement, error)
+}
+
+type StreamParser interface {
+	ParseStream(ctx context.Context, r io.Reader, chunks chan<- TransactionChunk) ([]RowError, error)
 }
