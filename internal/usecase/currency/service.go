@@ -153,13 +153,6 @@ func (s *Service) Refresh(ctx context.Context) error {
 	return nil
 }
 func (s *Service) SyncByDate(ctx context.Context, date time.Time) error {
-	nowMSK := s.nowFn().In(moscowLoc)
-	maxAllowedDay := time.Date(nowMSK.Year(), nowMSK.Month(), nowMSK.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, 1)
-	reqInMSK := date.In(moscowLoc)
-	reqDay := time.Date(reqInMSK.Year(), reqInMSK.Month(), reqInMSK.Day(), 0, 0, 0, 0, time.UTC)
-	if reqDay.After(maxAllowedDay) {
-		return fmt.Errorf("%w: sync date cannot be in the far future", domain.ErrInvalidModel)
-	}
 	daily, err := s.provider.FetchByDate(ctx, date)
 	if err != nil {
 		return fmt.Errorf("currency: fetch rates by date: %w", err)
