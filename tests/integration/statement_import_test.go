@@ -243,7 +243,8 @@ func TestStreamStatementImportCopyFromIdempotencyAndAtomicity(t *testing.T) {
 	morningNoExt := "account_number;booked_at;amount;currency;external_id;description;counterparty\n" +
 		"40817810000000000001;2026-11-22;-300.00;RUB;;Кофе;Кофейня\n"
 	eveningNoExt := "account_number;booked_at;amount;currency;external_id;description;counterparty\n" +
-		"40817810000000000001;2026-11-22;-300.00;RUB;;Кофе;Кофейня\n"
+		"40817810000000000001;2026-11-22;-300.00;RUB;;Кофе;Кофейня\n" +
+		"40817810000000000001;2026-11-22;-850.00;RUB;op-dinner-1;Ужин;Кафе\n"
 	rA, err := svc.Import(ctx, usecasestmt.ImportCommand{
 		UserID:    ownerUserID,
 		AccountID: accountID,
@@ -259,14 +260,14 @@ func TestStreamStatementImportCopyFromIdempotencyAndAtomicity(t *testing.T) {
 		FileName:  "evening_no_ext.csv",
 		Reader:    strings.NewReader(eveningNoExt),
 	})
-	if err != nil || rB.ImportedCount != 1 {
+	if err != nil || rB.ImportedCount != 2 {
 		t.Fatalf("second identical no-external-id payment must not be lost: err=%v res=%+v", err, rB)
 	}
 	var afterNoExt int
 	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM transactions WHERE account_id = $1::uuid", string(accountID)).Scan(&afterNoExt); err != nil {
 		t.Fatal(err)
 	}
-	if afterNoExt != beforeNoExt+2 {
+	if afterNoExt != beforeNoExt+3 {
 		t.Fatalf("expected +2 transactions for two separate no-external-id files, got %d (was %d)", afterNoExt, beforeNoExt)
 	}
 }
