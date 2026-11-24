@@ -130,3 +130,56 @@ func TestServiceConvertDirectionsAndEdgeCases(t *testing.T) {
 		t.Fatalf("expected ErrInvalidAmount for huge amount DoS guard, got %v", err)
 	}
 }
+
+func TestServiceConvertSymmetryAcrossDifferentLatestRateDates(t *testing.T) {
+	ctx := context.Background()
+	nov20 := time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC)
+	nov24 := time.Date(2026, 11, 24, 0, 0, 0, 0, time.UTC)
+
+	// 20 ноября: USD = 90 RUB, EUR = 100 RUB.
+	// 24 ноября: обновлён только EUR до 200 RUB, USD остался от 20 ноября (90 RUB).
+	repo := newFakeRepo()
+	_ = repo.SaveBatch(ctx, domain.DailyRates{
+		Date: nov20,
+		Rates: map[money.Currency]domain.ExchangeRate{
+			"USD": {Currency: "USD", RateDate: nov20, RUBPerUnit: big.NewRat(90, 1)},
+			"EUR": {Currency: "EUR", RateDate: nov20, RUBPerUnit: big.NewRat(100, 1)},
+		},
+	})
+	_ = repo.SaveBatch(ctx, domain.DailyRates{
+		Date: nov24,
+		Rates: map[money.Currency]domain.ExchangeRate{
+			"EUR": {Currency: "EUR", RateDate: nov24, RUBPerUnit: big.NewRat(200, 1)},
+		},
+	})
+
+	svc := currency.NewService(&fakeProvider{}, repo)
+
+	oneUSD, _ := money.Parse("1.0000")
+	// Прямая конвертация без даты: 1 USD -> EUR (90 / 200 = 0.4500 EUR)
+	fwd, err := svc.Convert(ctx, currency.ConvertRequest{
+		Amount: money.Money{Amount: oneUSD, Currency: "USD"},
+		To:     "EUR",
+	})
+	if err != nil {
+		t.Fatalf("USD -> EUR failed: %v", err)
+	}
+	if fwd.Target.Amount.String() != "0.4500" {
+		t.Fatalf("expected 1 USD -> 0.4500 EUR, got %s", fwd.Target.Amount.String())
+	}
+
+	// Обратная конвертация без даты: 0.4500 EUR -> USD (0.45 * 200 / 90 = 1.0000 USD)
+	back, err := svc.Convert(ctx, currency.ConvertRequest{
+		Amount: fwd.Target,
+		To:     "USD",
+	})
+	if err != nil {
+		t.Fatalf("EUR -> USD failed: %v", err)
+	}
+	if back.Target.Amount.String() != "1.0000" {
+		t.Fatalf("expected round-trip 0.4500 EUR -> 1.0000 USD, got %s", back.Target.Amount.String())
+	}
+	if !fwd.RateDate.Equal(back.RateDate) || !fwd.RateDate.Equal(nov20) {
+		t.Fatalf("expected symmetric pair RateDate=%v, got fwd=%v back=%v", nov20, fwd.RateDate, back.RateDate)
+	}
+}

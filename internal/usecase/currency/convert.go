@@ -93,7 +93,11 @@ func (s *Service) Convert(ctx context.Context, req ConvertRequest) (ConvertResul
 		}, nil
 	}
 
-	fromRate, toRate, err := s.resolveConsistentRatePair(ctx, req.Amount.Currency, req.To, normalizedDate)
+	evalDate := todayMSK
+	if normalizedDate != nil {
+		evalDate = *normalizedDate
+	}
+	fromRate, toRate, err := s.resolveConsistentRatePair(ctx, req.Amount.Currency, req.To, evalDate)
 	if err != nil {
 		return ConvertResult{}, err
 	}
@@ -115,23 +119,12 @@ func (s *Service) Convert(ctx context.Context, req ConvertRequest) (ConvertResul
 	}, nil
 }
 
-// resolveConsistentRatePair гарантирует, что оба курса в паре взяты на согласованную дату,
-// исключая рассогласование курсов при фоновом обновлении кеша между двумя вызовами GetRate.
-func (s *Service) resolveConsistentRatePair(ctx context.Context, from, to money.Currency, date *time.Time) (domain.ExchangeRate, domain.ExchangeRate, error) {
-	if date != nil {
-		fromRate, err := s.GetRate(ctx, from, date)
-		if err != nil {
-			return domain.ExchangeRate{}, domain.ExchangeRate{}, err
-		}
-		toRate, err := s.GetRate(ctx, to, date)
-		if err != nil {
-			return domain.ExchangeRate{}, domain.ExchangeRate{}, err
-		}
-		return fromRate, toRate, nil
-	}
-
+// resolveConsistentRatePair запрашивает оба курса на единую дату оценки (evalDate),
+// гарантируя полную симметричность прямого (A -> B) и обратного (B -> A) пересчёта
+// независимо от порядка валют и различий в последних датах обновления отдельных валют.
+func (s *Service) resolveConsistentRatePair(ctx context.Context, from, to money.Currency, evalDate time.Time) (domain.ExchangeRate, domain.ExchangeRate, error) {
 	if from == money.RUB {
-		toRate, err := s.GetRate(ctx, to, nil)
+		toRate, err := s.GetRate(ctx, to, &evalDate)
 		if err != nil {
 			return domain.ExchangeRate{}, domain.ExchangeRate{}, err
 		}
@@ -144,7 +137,7 @@ func (s *Service) resolveConsistentRatePair(ctx context.Context, from, to money.
 	}
 
 	if to == money.RUB {
-		fromRate, err := s.GetRate(ctx, from, nil)
+		fromRate, err := s.GetRate(ctx, from, &evalDate)
 		if err != nil {
 			return domain.ExchangeRate{}, domain.ExchangeRate{}, err
 		}
@@ -156,14 +149,11 @@ func (s *Service) resolveConsistentRatePair(ctx context.Context, from, to money.
 		return fromRate, toRate, nil
 	}
 
-	// Кросс-пара Foreign -> Foreign без явной даты: привязываем второй курс к дате первого,
-	// чтобы оба курса относились к одному и тому же снимку ЦБ РФ.
-	fromRate, err := s.GetRate(ctx, from, nil)
+	fromRate, err := s.GetRate(ctx, from, &evalDate)
 	if err != nil {
 		return domain.ExchangeRate{}, domain.ExchangeRate{}, err
 	}
-	rateDay := fromRate.RateDate
-	toRate, err := s.GetRate(ctx, to, &rateDay)
+	toRate, err := s.GetRate(ctx, to, &evalDate)
 	if err != nil {
 		return domain.ExchangeRate{}, domain.ExchangeRate{}, err
 	}
