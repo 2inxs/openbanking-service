@@ -49,3 +49,7 @@ func repositoryError(err, notFound, conflict error) error {
 	// Server diagnostics may include bank identifiers and personal data.
 	return ErrUnavailable
 }
+
+type txBeginner interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
+}

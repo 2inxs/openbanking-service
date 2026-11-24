@@ -16,10 +16,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-type txBeginner interface {
-	Begin(ctx context.Context) (pgx.Tx, error)
-}
-
 type StatementImportRepository struct {
 	db DBTX
 }
@@ -132,6 +128,9 @@ func (r *StatementImportRepository) ImportStream(
 		if err = tx.QueryRow(ctx, "SELECT id::text FROM accounts WHERE id = $1::uuid FOR UPDATE", string(target.ID)).Scan(&lockedID); err != nil {
 			return repositoryError(err, usecasestmt.ErrAccountNotFound, domain.ErrInvalidModel)
 		}
+		if err = tx.QueryRow(ctx, "SELECT gen_random_uuid()::text").Scan(&importID); err != nil {
+			return repositoryError(err, usecasestmt.ErrAccountNotFound, domain.ErrInvalidModel)
+		}
 		if _, err = tx.Exec(ctx, createTempSQL); err != nil {
 			return repositoryError(err, usecasestmt.ErrAccountNotFound, domain.ErrInvalidModel)
 		}
@@ -235,11 +234,11 @@ func (r *StatementImportRepository) ImportStream(
 	}
 
 	// Атомарно резервируем запись в statement_imports с защитой от гонки параллельных загрузок того же файла.
-	insertImportSQL := "INSERT INTO statement_imports (account_id, file_name, file_sha256, status) " +
-		"VALUES ($1::uuid, $2, $3, 'processing') " +
+	insertImportSQL := "INSERT INTO statement_imports (id, account_id, file_name, file_sha256, status) " +
+		"VALUES ($1::uuid, $2::uuid, $3, $4, 'processing') " +
 		"ON CONFLICT (account_id, file_sha256) WHERE status <> 'failed' DO NOTHING " +
 		"RETURNING id::text"
-	err := tx.QueryRow(ctx, insertImportSQL, string(target.ID), safeFileName, fileSHA256).Scan(&importID)
+	err := tx.QueryRow(ctx, insertImportSQL, importID, string(target.ID), safeFileName, fileSHA256).Scan(&importID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		var existingImportID string
 		findExistingSQL := "SELECT id::text FROM statement_imports " +
