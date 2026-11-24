@@ -1,30 +1,42 @@
 package statement
 
 import (
+	"archive/zip"
+	"bytes"
+	"encoding/xml"
 	"errors"
 	"fmt"
-	usecasestmt "github.com/2inxs/openbanking-service/internal/usecase/statement"
-	"github.com/xuri/excelize/v2"
 	"io"
+	"math"
+	"strconv"
 	"strings"
 	"time"
+
+	usecasestmt "github.com/2inxs/openbanking-service/internal/usecase/statement"
+	"github.com/xuri/excelize/v2"
 )
 
 // MaxUnzippedBytes защищает от ZIP-бомб при распаковке XLSX-архива (50 МБ).
 const MaxUnzippedBytes = 50 << 20
 
+const (
+	minExcelSerialDate = 1.0           // 1900-01-01
+	maxExcelSerialDate = 2958465.99999 // 9999-12-31
+)
+
 var ErrFormulaNotAllowed = errors.New("statement: formulas are not allowed in XLSX cells")
 
 var _ usecasestmt.Parser = (*XLSXParser)(nil)
 
-// XLSXParser разбирает банковскую выписку в строго зафиксированном формате XLSX.
 type XLSXParser struct {
+	maxFileSize   int64
 	maxRows       int
 	maxUnzipBytes int64
 }
 
 func NewXLSXParser() *XLSXParser {
 	return &XLSXParser{
+		maxFileSize:   usecasestmt.MaxFileSize,
 		maxRows:       usecasestmt.MaxRows,
 		maxUnzipBytes: MaxUnzippedBytes,
 	}
@@ -35,7 +47,22 @@ func (p *XLSXParser) Parse(r io.Reader) (usecasestmt.ParsedStatement, error) {
 		return usecasestmt.ParsedStatement{}, usecasestmt.ErrEmptyStatement
 	}
 
-	f, err := excelize.OpenReader(r, excelize.Options{
+	rawBytes, err := io.ReadAll(io.LimitReader(r, p.maxFileSize+1))
+	if err != nil {
+		return usecasestmt.ParsedStatement{}, fmt.Errorf("%w: %v", usecasestmt.ErrMalformedFile, err)
+	}
+	if int64(len(rawBytes)) > p.maxFileSize {
+		return usecasestmt.ParsedStatement{}, usecasestmt.ErrFileTooLarge
+	}
+	if len(rawBytes) == 0 {
+		return usecasestmt.ParsedStatement{}, usecasestmt.ErrEmptyStatement
+	}
+
+	if err := validateFirstSheetXML(rawBytes, p.maxUnzipBytes); err != nil {
+		return usecasestmt.ParsedStatement{}, err
+	}
+
+	f, err := excelize.OpenReader(bytes.NewReader(rawBytes), excelize.Options{
 		UnzipSizeLimit:    p.maxUnzipBytes,
 		UnzipXMLSizeLimit: p.maxUnzipBytes,
 	})
@@ -48,6 +75,12 @@ func (p *XLSXParser) Parse(r io.Reader) (usecasestmt.ParsedStatement, error) {
 	if sheetName == "" {
 		return usecasestmt.ParsedStatement{}, usecasestmt.ErrEmptyStatement
 	}
+
+	wbProps, err := f.GetWorkbookProps()
+	if err != nil {
+		return usecasestmt.ParsedStatement{}, fmt.Errorf("%w: read workbook props: %v", usecasestmt.ErrMalformedFile, err)
+	}
+	date1904 := wbProps.Date1904 != nil && *wbProps.Date1904
 
 	rows, err := f.Rows(sheetName)
 	if err != nil {
@@ -62,9 +95,17 @@ func (p *XLSXParser) Parse(r io.Reader) (usecasestmt.ParsedStatement, error) {
 		return usecasestmt.ParsedStatement{}, usecasestmt.ErrEmptyStatement
 	}
 
-	header, err := rows.Columns()
+	header, err := readRawRow(f, sheetName, 1, len(expectedStatementHeader))
 	if err != nil {
 		return usecasestmt.ParsedStatement{}, fmt.Errorf("%w: read header: %v", usecasestmt.ErrMalformedFile, err)
+	}
+	// Проверяем, нет ли лишних непустых колонок в заголовке.
+	displayHeader, err := rows.Columns()
+	if err != nil {
+		return usecasestmt.ParsedStatement{}, fmt.Errorf("%w: read header columns: %v", usecasestmt.ErrMalformedFile, err)
+	}
+	if len(displayHeader) != len(expectedStatementHeader) {
+		return usecasestmt.ParsedStatement{}, fmt.Errorf("%w: expected %d columns, got %d", usecasestmt.ErrInvalidHeader, len(expectedStatementHeader), len(displayHeader))
 	}
 	if err := validateHeader(header); err != nil {
 		return usecasestmt.ParsedStatement{}, err
@@ -75,12 +116,17 @@ func (p *XLSXParser) Parse(r io.Reader) (usecasestmt.ParsedStatement, error) {
 
 	for rows.Next() {
 		rowNumber++
-		cols, err := rows.Columns()
+		displayCols, err := rows.Columns()
 		if err != nil {
 			return usecasestmt.ParsedStatement{}, fmt.Errorf("%w at row %d: %v", usecasestmt.ErrMalformedFile, rowNumber, err)
 		}
 
-		if isEmptyRow(cols) {
+		rawCols, err := readRawRow(f, sheetName, rowNumber, len(expectedStatementHeader))
+		if err != nil {
+			return usecasestmt.ParsedStatement{}, fmt.Errorf("%w at row %d: %v", usecasestmt.ErrMalformedFile, rowNumber, err)
+		}
+
+		if isEmptyRow(displayCols) && isEmptyRow(rawCols) {
 			continue
 		}
 
@@ -88,15 +134,19 @@ func (p *XLSXParser) Parse(r io.Reader) (usecasestmt.ParsedStatement, error) {
 			return usecasestmt.ParsedStatement{}, fmt.Errorf("%w: max %d rows allowed", usecasestmt.ErrTooManyRows, p.maxRows)
 		}
 
-		if len(cols) > len(expectedStatementHeader) {
+		if len(displayCols) > len(expectedStatementHeader) {
 			stmt.RowErrors = append(stmt.RowErrors, usecasestmt.RowError{
 				Row:     rowNumber,
-				Message: fmt.Sprintf("expected %d columns, got %d", len(expectedStatementHeader), len(cols)),
+				Message: fmt.Sprintf("expected %d columns, got %d", len(expectedStatementHeader), len(displayCols)),
 			})
 			continue
 		}
 
-		if formulaCol, hasFormula := p.rowHasFormula(f, sheetName, rowNumber, len(expectedStatementHeader)); hasFormula {
+		formulaCol, hasFormula, err := p.rowHasFormula(f, sheetName, rowNumber, len(expectedStatementHeader))
+		if err != nil {
+			return usecasestmt.ParsedStatement{}, fmt.Errorf("%w at row %d: %v", usecasestmt.ErrMalformedFile, rowNumber, err)
+		}
+		if hasFormula {
 			stmt.RowErrors = append(stmt.RowErrors, usecasestmt.RowError{
 				Row:     rowNumber,
 				Message: fmt.Sprintf("%s (column %d)", ErrFormulaNotAllowed.Error(), formulaCol),
@@ -104,15 +154,12 @@ func (p *XLSXParser) Parse(r io.Reader) (usecasestmt.ParsedStatement, error) {
 			continue
 		}
 
-		record := make([]string, len(expectedStatementHeader))
-		copy(record, cols)
-
 		currentRow := rowNumber
 		dateParser := func(raw string) (time.Time, error) {
-			return parseXLSXDate(f, sheetName, currentRow, 2, raw)
+			return parseXLSXDate(f, sheetName, currentRow, 2, raw, date1904)
 		}
 
-		tx, rowErr := normalizeRow(rowNumber, record, &stmt.AccountNumber, &stmt.Currency, dateParser)
+		tx, rowErr := normalizeRow(rowNumber, rawCols, &stmt.AccountNumber, &stmt.Currency, dateParser)
 		if rowErr != nil {
 			stmt.RowErrors = append(stmt.RowErrors, *rowErr)
 			continue
@@ -135,42 +182,133 @@ func (p *XLSXParser) Parse(r io.Reader) (usecasestmt.ParsedStatement, error) {
 	return stmt, nil
 }
 
-func (p *XLSXParser) rowHasFormula(f *excelize.File, sheet string, row, maxCols int) (int, bool) {
+// validateFirstSheetXML проверяет, что первый XML-лист в архиве не обрезан и имеет корректную структуру XML.
+func validateFirstSheetXML(archive []byte, maxUnzipBytes int64) error {
+	zr, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+	if err != nil {
+		return fmt.Errorf("%w: %v", usecasestmt.ErrMalformedFile, err)
+	}
+
+	var totalUncompressed uint64
+	var sheetFile *zip.File
+	for _, zf := range zr.File {
+		totalUncompressed += zf.UncompressedSize64
+		if totalUncompressed > uint64(maxUnzipBytes) {
+			return fmt.Errorf("%w: uncompressed size exceeds limit", usecasestmt.ErrMalformedFile)
+		}
+		if zf.Name == "xl/worksheets/sheet1.xml" {
+			sheetFile = zf
+		}
+	}
+	if sheetFile == nil {
+		// Если лист назван иначе, проверим все XML в xl/worksheets/.
+		for _, zf := range zr.File {
+			if strings.HasPrefix(zf.Name, "xl/worksheets/") && strings.HasSuffix(zf.Name, ".xml") {
+				sheetFile = zf
+				break
+			}
+		}
+	}
+	if sheetFile == nil {
+		return fmt.Errorf("%w: worksheet XML not found", usecasestmt.ErrMalformedFile)
+	}
+
+	rc, err := sheetFile.Open()
+	if err != nil {
+		return fmt.Errorf("%w: open worksheet XML: %v", usecasestmt.ErrMalformedFile, err)
+	}
+	defer func() { _ = rc.Close() }()
+
+	dec := xml.NewDecoder(io.LimitReader(rc, maxUnzipBytes+1))
+	for {
+		_, err := dec.Token()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("%w: truncated or invalid worksheet XML: %v", usecasestmt.ErrMalformedFile, err)
+		}
+	}
+	return nil
+}
+
+func readRawRow(f *excelize.File, sheet string, row, maxCols int) ([]string, error) {
+	cols := make([]string, maxCols)
 	for col := 1; col <= maxCols; col++ {
 		cell, err := excelize.CoordinatesToCellName(col, row)
 		if err != nil {
-			continue
+			return nil, err
 		}
-		if formula, err := f.GetCellFormula(sheet, cell); err == nil && strings.TrimSpace(formula) != "" {
-			return col, true
+		val, err := f.GetCellValue(sheet, cell, excelize.Options{RawCellValue: true})
+		if err != nil {
+			return nil, err
 		}
-		if cellType, err := f.GetCellType(sheet, cell); err == nil && cellType == excelize.CellTypeFormula {
-			return col, true
-		}
+		cols[col-1] = val
 	}
-	return 0, false
+	return cols, nil
 }
 
-func parseXLSXDate(f *excelize.File, sheet string, row, col int, displayVal string) (time.Time, error) {
-	if t, err := parseStatementDate(displayVal); err == nil {
-		return t, nil
-	}
-	cell, err := excelize.CoordinatesToCellName(col, row)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("invalid booked_at %q", displayVal)
-	}
-	raw, err := f.GetCellValue(sheet, cell, excelize.Options{RawCellValue: true})
-	if err != nil || strings.TrimSpace(raw) == "" {
-		return time.Time{}, fmt.Errorf("invalid booked_at %q: expected YYYY-MM-DD, RFC3339 or Excel date", displayVal)
-	}
-	var serial float64
-	if _, err := fmt.Sscanf(strings.TrimSpace(raw), "%f", &serial); err == nil && serial > 0 {
-		t, err := excelize.ExcelDateToTime(serial, false)
-		if err == nil {
-			return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC), nil
+func (p *XLSXParser) rowHasFormula(f *excelize.File, sheet string, row, maxCols int) (int, bool, error) {
+	for col := 1; col <= maxCols; col++ {
+		cell, err := excelize.CoordinatesToCellName(col, row)
+		if err != nil {
+			return 0, false, err
+		}
+		formula, err := f.GetCellFormula(sheet, cell)
+		if err != nil {
+			return 0, false, err
+		}
+		if strings.TrimSpace(formula) != "" {
+			return col, true, nil
+		}
+		cellType, err := f.GetCellType(sheet, cell)
+		if err != nil {
+			return 0, false, err
+		}
+		if cellType == excelize.CellTypeFormula {
+			return col, true, nil
 		}
 	}
-	return time.Time{}, fmt.Errorf("invalid booked_at %q: expected YYYY-MM-DD, RFC3339 or Excel date", displayVal)
+	return 0, false, nil
+}
+
+func parseXLSXDate(f *excelize.File, sheet string, row, col int, rawVal string, date1904 bool) (time.Time, error) {
+	s := strings.TrimSpace(rawVal)
+	if s == "" {
+		return time.Time{}, errors.New("booked_at is required")
+	}
+
+	cell, err := excelize.CoordinatesToCellName(col, row)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid booked_at %q", rawVal)
+	}
+	cellType, err := f.GetCellType(sheet, cell)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid booked_at %q: %v", rawVal, err)
+	}
+
+	switch cellType {
+	case excelize.CellTypeSharedString, excelize.CellTypeInlineString:
+		return parseStatementDate(s)
+	case excelize.CellTypeUnset, excelize.CellTypeNumber, excelize.CellTypeDate:
+		if t, err := parseStatementDate(s); err == nil {
+			return t, nil
+		}
+		serial, err := strconv.ParseFloat(s, 64)
+		if err != nil || math.IsNaN(serial) || math.IsInf(serial, 0) {
+			return time.Time{}, fmt.Errorf("invalid booked_at %q: expected YYYY-MM-DD, RFC3339 or Excel date", rawVal)
+		}
+		if serial < minExcelSerialDate || serial > maxExcelSerialDate {
+			return time.Time{}, fmt.Errorf("invalid booked_at %q: Excel serial date out of range", rawVal)
+		}
+		t, err := excelize.ExcelDateToTime(serial, date1904)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("invalid booked_at %q: %v", rawVal, err)
+		}
+		return t.UTC(), nil
+	default:
+		return time.Time{}, fmt.Errorf("invalid booked_at %q: unsupported cell type", rawVal)
+	}
 }
 
 func isEmptyRow(cols []string) bool {

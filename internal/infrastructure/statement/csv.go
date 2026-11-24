@@ -6,8 +6,9 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
-	usecasestmt "github.com/2inxs/openbanking-service/internal/usecase/statement"
 	"io"
+
+	usecasestmt "github.com/2inxs/openbanking-service/internal/usecase/statement"
 )
 
 const (
@@ -18,13 +19,16 @@ const (
 
 var _ usecasestmt.Parser = (*CSVParser)(nil)
 
-// CSVParser разбирает банковскую выписку в строго зафиксированном CSV-формате.
 type CSVParser struct {
-	maxRows int
+	maxFileSize int64
+	maxRows     int
 }
 
 func NewCSVParser() *CSVParser {
-	return &CSVParser{maxRows: usecasestmt.MaxRows}
+	return &CSVParser{
+		maxFileSize: usecasestmt.MaxFileSize,
+		maxRows:     usecasestmt.MaxRows,
+	}
 }
 
 func (p *CSVParser) Parse(r io.Reader) (usecasestmt.ParsedStatement, error) {
@@ -32,8 +36,12 @@ func (p *CSVParser) Parse(r io.Reader) (usecasestmt.ParsedStatement, error) {
 		return usecasestmt.ParsedStatement{}, usecasestmt.ErrEmptyStatement
 	}
 
-	br := bufio.NewReader(r)
+	limited := &limitedReader{r: r, remaining: p.maxFileSize}
+	br := bufio.NewReader(limited)
 	if err := stripUTF8BOM(br); err != nil {
+		if errors.Is(err, usecasestmt.ErrFileTooLarge) {
+			return usecasestmt.ParsedStatement{}, err
+		}
 		return usecasestmt.ParsedStatement{}, fmt.Errorf("%w: %v", usecasestmt.ErrMalformedFile, err)
 	}
 
@@ -44,6 +52,9 @@ func (p *CSVParser) Parse(r io.Reader) (usecasestmt.ParsedStatement, error) {
 
 	header, err := reader.Read()
 	if err != nil {
+		if limited.exceeded || errors.Is(err, usecasestmt.ErrFileTooLarge) {
+			return usecasestmt.ParsedStatement{}, usecasestmt.ErrFileTooLarge
+		}
 		if errors.Is(err, io.EOF) {
 			return usecasestmt.ParsedStatement{}, usecasestmt.ErrEmptyStatement
 		}
@@ -54,28 +65,34 @@ func (p *CSVParser) Parse(r io.Reader) (usecasestmt.ParsedStatement, error) {
 	}
 
 	var stmt usecasestmt.ParsedStatement
-	rowNumber := 1
 
 	for {
 		record, err := reader.Read()
+		if limited.exceeded || errors.Is(err, usecasestmt.ErrFileTooLarge) {
+			return usecasestmt.ParsedStatement{}, usecasestmt.ErrFileTooLarge
+		}
 		if errors.Is(err, io.EOF) {
 			break
 		}
-		rowNumber++
+
+		line, _ := reader.FieldPos(0)
+		if line <= 0 {
+			line = 1
+		}
 
 		if err != nil {
 			var parseErr *csv.ParseError
 			if errors.As(err, &parseErr) {
-				return usecasestmt.ParsedStatement{}, fmt.Errorf("%w at row %d: %v", usecasestmt.ErrMalformedFile, rowNumber, parseErr.Err)
+				return usecasestmt.ParsedStatement{}, fmt.Errorf("%w at row %d: %v", usecasestmt.ErrMalformedFile, parseErr.Line, parseErr.Err)
 			}
-			return usecasestmt.ParsedStatement{}, fmt.Errorf("%w at row %d: %v", usecasestmt.ErrMalformedFile, rowNumber, err)
+			return usecasestmt.ParsedStatement{}, fmt.Errorf("%w at row %d: %v", usecasestmt.ErrMalformedFile, line, err)
 		}
 
 		if len(stmt.Transactions)+len(stmt.RowErrors) >= p.maxRows {
 			return usecasestmt.ParsedStatement{}, fmt.Errorf("%w: max %d rows allowed", usecasestmt.ErrTooManyRows, p.maxRows)
 		}
 
-		tx, rowErr := normalizeRow(rowNumber, record, &stmt.AccountNumber, &stmt.Currency, nil)
+		tx, rowErr := normalizeRow(line, record, &stmt.AccountNumber, &stmt.Currency, nil)
 		if rowErr != nil {
 			stmt.RowErrors = append(stmt.RowErrors, *rowErr)
 			continue
@@ -92,6 +109,29 @@ func (p *CSVParser) Parse(r io.Reader) (usecasestmt.ParsedStatement, error) {
 	}
 
 	return stmt, nil
+}
+
+type limitedReader struct {
+	r         io.Reader
+	remaining int64
+	exceeded  bool
+}
+
+func (l *limitedReader) Read(p []byte) (int, error) {
+	if l.remaining < 0 {
+		l.exceeded = true
+		return 0, usecasestmt.ErrFileTooLarge
+	}
+	if int64(len(p)) > l.remaining+1 {
+		p = p[:l.remaining+1]
+	}
+	n, err := l.r.Read(p)
+	l.remaining -= int64(n)
+	if l.remaining < 0 {
+		l.exceeded = true
+		return n, usecasestmt.ErrFileTooLarge
+	}
+	return n, err
 }
 
 func stripUTF8BOM(br *bufio.Reader) error {

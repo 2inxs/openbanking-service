@@ -9,11 +9,15 @@ import (
 	"github.com/2inxs/openbanking-service/internal/domain/money"
 )
 
-const MaxRows = 100_000
+const (
+	MaxFileSize = 10 << 20 // 10 МБ
+	MaxRows     = 100_000
+)
 
 var (
 	ErrEmptyStatement   = errors.New("statement: file has no transactions")
 	ErrInvalidHeader    = errors.New("statement: invalid statement header")
+	ErrFileTooLarge     = errors.New("statement: file size exceeds 10 MB limit")
 	ErrTooManyRows      = errors.New("statement: row limit exceeded")
 	ErrMalformedFile    = errors.New("statement: malformed file structure")
 	ErrValidationFailed = errors.New("statement: one or more rows are invalid")
