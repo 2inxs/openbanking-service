@@ -29,6 +29,9 @@ type ConvertResult struct {
 }
 
 func (s *Service) Convert(ctx context.Context, req ConvertRequest) (ConvertResult, error) {
+	if s == nil || s.repo == nil {
+		return ConvertResult{}, fmt.Errorf("%w: currency service is not initialized", domain.ErrInvalidModel)
+	}
 	if err := req.Amount.Validate(); err != nil {
 		return ConvertResult{}, ErrInvalidCurrency
 	}
