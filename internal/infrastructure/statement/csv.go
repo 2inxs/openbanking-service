@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"unicode/utf8"
 
 	usecasestmt "github.com/2inxs/openbanking-service/internal/usecase/statement"
 )
@@ -60,6 +61,11 @@ func (p *CSVParser) Parse(r io.Reader) (usecasestmt.ParsedStatement, error) {
 		}
 		return usecasestmt.ParsedStatement{}, fmt.Errorf("%w: %v", usecasestmt.ErrMalformedFile, err)
 	}
+	for i, col := range header {
+		if !utf8.ValidString(col) {
+			return usecasestmt.ParsedStatement{}, fmt.Errorf("%w: column %d contains invalid UTF-8", usecasestmt.ErrInvalidHeader, i+1)
+		}
+	}
 	if err := validateHeader(header); err != nil {
 		return usecasestmt.ParsedStatement{}, err
 	}
@@ -90,6 +96,14 @@ func (p *CSVParser) Parse(r io.Reader) (usecasestmt.ParsedStatement, error) {
 
 		if len(stmt.Transactions)+len(stmt.RowErrors) >= p.maxRows {
 			return usecasestmt.ParsedStatement{}, fmt.Errorf("%w: max %d rows allowed", usecasestmt.ErrTooManyRows, p.maxRows)
+		}
+
+		if !isValidUTF8Record(record) {
+			stmt.RowErrors = append(stmt.RowErrors, usecasestmt.RowError{
+				Row:     line,
+				Message: "row contains invalid UTF-8 sequence",
+			})
+			continue
 		}
 
 		tx, rowErr := normalizeRow(line, record, &stmt.AccountNumber, &stmt.Currency, nil)
@@ -145,4 +159,13 @@ func stripUTF8BOM(br *bufio.Reader) error {
 		return err
 	}
 	return nil
+}
+
+func isValidUTF8Record(record []string) bool {
+	for _, field := range record {
+		if !utf8.ValidString(field) {
+			return false
+		}
+	}
+	return true
 }

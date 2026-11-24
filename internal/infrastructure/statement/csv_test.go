@@ -143,3 +143,20 @@ func TestCSVParserReportsRowNumbersAndReasonsOnInvalidRows(t *testing.T) {
 		}
 	}
 }
+
+func TestCSVParserRejectsInvalidUTF8BytesWithRowNumber(t *testing.T) {
+	raw := "account_number;booked_at;amount;currency;external_id;description;counterparty\n" +
+		"40817810000000000001;2026-11-20;-100.00;RUB;tx-1;Корректная строка;Магазин\n" +
+		"40817810000000000001;2026-11-21;-50.00;RUB;tx-2;Битый байт \xff в описании;Магазин\n"
+
+	got, err := statement.NewCSVParser().Parse(strings.NewReader(raw))
+	if !errors.Is(err, usecasestmt.ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed, got %v", err)
+	}
+	if len(got.Transactions) != 1 {
+		t.Fatalf("expected 1 valid transaction, got %d", len(got.Transactions))
+	}
+	if len(got.RowErrors) != 1 || got.RowErrors[0].Row != 3 {
+		t.Fatalf("expected RowError at row 3 for invalid UTF-8, got %+v", got.RowErrors)
+	}
+}
