@@ -95,8 +95,9 @@ func (r *StatementImportRepository) ImportStream(
 	log := usecasestmt.LoggerFromContext(ctx)
 
 	var (
-		tx      pgx.Tx
-		txReady bool
+		importID string
+		tx       pgx.Tx
+		txReady  bool
 	)
 	defer func() {
 		if tx != nil {
