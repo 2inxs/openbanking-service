@@ -145,7 +145,10 @@ func (s *Service) Refresh(ctx context.Context) error {
 		return fmt.Errorf("currency: save rates batch: %w", err)
 	}
 	if s.cache != nil {
-		s.cache.Replace(filtered, s.nowFn().UTC())
+		currentDate, _, ok := s.cache.Meta()
+		if !ok || !filtered.Date.Before(currentDate) {
+			s.cache.Replace(filtered, s.nowFn().UTC())
+		}
 	}
 	return nil
 }
