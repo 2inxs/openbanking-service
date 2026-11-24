@@ -161,7 +161,8 @@ paths:
               properties:
                 bank_id:
                   type: string
-                  example: "mock-bank"
+                  description: Строковый код банка (banks.code)
+                  example: "mockbank"
       responses:
         "200":
           description: Подключение уже существовало и возвращено повторно
