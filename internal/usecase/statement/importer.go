@@ -9,12 +9,15 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/2inxs/openbanking-service/internal/domain"
 	"github.com/2inxs/openbanking-service/internal/domain/money"
+	"github.com/2inxs/openbanking-service/internal/usecase"
+	"github.com/2inxs/openbanking-service/pkg/logger"
 )
 
 var (
@@ -25,7 +28,7 @@ var (
 
 type ctxLoggerKey struct{}
 
-// WithLoggerContext кладёт обогащённый *slog.Logger в контекст для сквозной трассировки слоёв.
+// WithLoggerContext кладёт настроенный *slog.Logger в контекст для сквозной трассировки слоёв.
 func WithLoggerContext(ctx context.Context, l *slog.Logger) context.Context {
 	if l == nil {
 		return ctx
@@ -53,7 +56,7 @@ type ImportCommand struct {
 	AccountID domain.AccountID
 	FileName  string
 	Format    string // "csv" или "xlsx"
-	TraceID   string // опциональный request_id; если пуст — ищется в ctx
+	TraceID   string // опциональный trace_id; request_id и user_id также автоматически читаются из ctx через pkg/logger
 	Reader    io.Reader
 }
 
@@ -81,6 +84,7 @@ type ImportService struct {
 	xlsxParser Parser
 	repo       ImportRepository
 	logger     *slog.Logger
+	audit      *usecase.AuditRecorder
 }
 
 func NewImportService(csvParser, xlsxParser Parser, repo ImportRepository) *ImportService {
@@ -92,26 +96,16 @@ func NewImportService(csvParser, xlsxParser Parser, repo ImportRepository) *Impo
 	}
 }
 
-func (s *ImportService) WithLogger(logger *slog.Logger) *ImportService {
-	if logger != nil {
-		s.logger = logger
+func (s *ImportService) WithLogger(l *slog.Logger) *ImportService {
+	if l != nil {
+		s.logger = l
 	}
 	return s
 }
 
-func resolveTraceID(ctx context.Context, explicit string) string {
-	if id := strings.TrimSpace(explicit); id != "" {
-		return id
-	}
-	if ctx == nil {
-		return ""
-	}
-	for _, key := range []string{"request_id", "trace_id", "X-Request-ID"} {
-		if v, ok := ctx.Value(key).(string); ok && strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
-		}
-	}
-	return ""
+func (s *ImportService) WithAudit(a *usecase.AuditRecorder) *ImportService {
+	s.audit = a
+	return s
 }
 
 func sanitizeLogFileName(name string) string {
@@ -133,32 +127,62 @@ func sanitizeLogFileName(name string) string {
 
 func (s *ImportService) Import(ctx context.Context, cmd ImportCommand) (ImportResult, error) {
 	startedAt := time.Now()
-	traceID := resolveTraceID(ctx, cmd.TraceID)
 	safeFileName := sanitizeLogFileName(cmd.FileName)
 
+	// Обогащаем контекст корреляционными полями штатного pkg/logger:
+	// contextHandler автоматически подставит request_id, trace_id, user_id и job во все логи.
+	tracedCtx := logger.WithFields(ctx, func(f *logger.ContextFields) {
+		if f.Job == "" {
+			f.Job = "statement_import"
+		}
+		if id := strings.TrimSpace(cmd.TraceID); id != "" && f.TraceID == "" {
+			f.TraceID = id
+		}
+	})
 	log := s.logger.With(
-		slog.String("trace_id", traceID),
 		slog.String("account_id", string(cmd.AccountID)),
 		slog.String("file_name", safeFileName),
 	)
-	tracedCtx := WithLoggerContext(ctx, log)
+	tracedCtx = WithLoggerContext(tracedCtx, log)
+
+	recordAudit := func(status domain.AuditStatus, resourceID string, meta map[string]string) {
+		if s.audit == nil {
+			return
+		}
+		fields := logger.FieldsFromContext(tracedCtx)
+		meta["account_id"] = string(cmd.AccountID)
+		if safeFileName != "" {
+			meta["file_name"] = safeFileName
+		}
+		s.audit.BestEffortLog(tracedCtx, domain.AuditEvent{
+			UserID:     fields.UserID,
+			Action:     domain.AuditActionStatementImported,
+			Status:     status,
+			RequestID:  fields.RequestID,
+			ResourceID: resourceID,
+			Metadata:   meta,
+		})
+	}
 
 	if strings.TrimSpace(string(cmd.AccountID)) == "" {
 		return ImportResult{}, ErrAccountNotFound
 	}
 	if cmd.Reader == nil {
+		recordAudit(domain.AuditStatusFailure, string(cmd.AccountID), map[string]string{"reason": "empty_statement"})
 		return ImportResult{}, ErrEmptyStatement
 	}
 
 	parser, format, err := s.selectParser(cmd.Format, safeFileName)
 	if err != nil {
 		log.WarnContext(tracedCtx, "statement import rejected: unsupported format", slog.String("error", err.Error()))
+		recordAudit(domain.AuditStatusFailure, string(cmd.AccountID), map[string]string{"reason": "unsupported_format"})
 		return ImportResult{}, err
 	}
 
 	target, err := s.repo.GetTargetAccount(tracedCtx, cmd.AccountID)
 	if err != nil {
 		log.WarnContext(tracedCtx, "statement import failed: target account lookup", slog.String("error", err.Error()))
+		recordAudit(domain.AuditStatusFailure, string(cmd.AccountID), map[string]string{"format": format, "reason": "account_lookup_failed"})
 		return ImportResult{}, err
 	}
 
@@ -230,6 +254,10 @@ func (s *ImportService) Import(ctx context.Context, cmd ImportCommand) (ImportRe
 			slog.Int64("duration_ms", durationMs),
 			slog.String("error", repoErr.Error()),
 		)
+		recordAudit(domain.AuditStatusFailure, string(cmd.AccountID), map[string]string{
+			"format": format,
+			"reason": "repository_error",
+		})
 		return res, repoErr
 	}
 	if prodErr != nil {
@@ -239,6 +267,11 @@ func (s *ImportService) Import(ctx context.Context, cmd ImportCommand) (ImportRe
 			slog.Int64("duration_ms", durationMs),
 			slog.String("error", prodErr.Error()),
 		)
+		recordAudit(domain.AuditStatusFailure, string(cmd.AccountID), map[string]string{
+			"format":      format,
+			"error_count": strconv.Itoa(len(rowErrors)),
+			"reason":      "parse_or_validation_failed",
+		})
 		return res, prodErr
 	}
 	if repoErr != nil {
@@ -246,6 +279,10 @@ func (s *ImportService) Import(ctx context.Context, cmd ImportCommand) (ImportRe
 			slog.Int64("duration_ms", durationMs),
 			slog.String("error", repoErr.Error()),
 		)
+		recordAudit(domain.AuditStatusFailure, string(cmd.AccountID), map[string]string{
+			"format": format,
+			"reason": "canceled",
+		})
 		return res, repoErr
 	}
 
@@ -256,6 +293,12 @@ func (s *ImportService) Import(ctx context.Context, cmd ImportCommand) (ImportRe
 		slog.Int("skipped_count", res.SkippedCount),
 		slog.Int64("duration_ms", durationMs),
 	)
+	recordAudit(domain.AuditStatusSuccess, string(res.ImportID), map[string]string{
+		"format":         format,
+		"file_sha256":    computedSHA,
+		"imported_count": strconv.Itoa(res.ImportedCount),
+		"skipped_count":  strconv.Itoa(res.SkippedCount),
+	})
 	return res, nil
 }
 
