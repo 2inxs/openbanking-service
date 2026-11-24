@@ -53,10 +53,11 @@ type ImportTargetAccount struct {
 }
 
 type ImportCommand struct {
+	UserID    domain.UserID // доверенный владелец счёта, определённый сервером (например, из сессии или DEMO_USER_ID)
 	AccountID domain.AccountID
 	FileName  string
 	Format    string // "csv" или "xlsx"
-	TraceID   string // опциональный trace_id; request_id и user_id также автоматически читаются из ctx через pkg/logger
+	TraceID   string // опциональный trace_id; request_id также автоматически читается из ctx через pkg/logger
 	Reader    io.Reader
 }
 
@@ -69,7 +70,7 @@ type ImportResult struct {
 }
 
 type ImportRepository interface {
-	GetTargetAccount(ctx context.Context, accountID domain.AccountID) (ImportTargetAccount, error)
+	GetTargetAccount(ctx context.Context, userID domain.UserID, accountID domain.AccountID) (ImportTargetAccount, error)
 	ImportStream(
 		ctx context.Context,
 		target ImportTargetAccount,
@@ -128,12 +129,14 @@ func sanitizeLogFileName(name string) string {
 func (s *ImportService) Import(ctx context.Context, cmd ImportCommand) (ImportResult, error) {
 	startedAt := time.Now()
 	safeFileName := sanitizeLogFileName(cmd.FileName)
+	userIDStr := strings.TrimSpace(string(cmd.UserID))
 
-	// Обогащаем контекст корреляционными полями штатного pkg/logger:
-	// contextHandler автоматически подставит request_id, trace_id, user_id и job во все логи.
 	tracedCtx := logger.WithFields(ctx, func(f *logger.ContextFields) {
 		if f.Job == "" {
 			f.Job = "statement_import"
+		}
+		if f.UserID == "" && userIDStr != "" {
+			f.UserID = userIDStr
 		}
 		if id := strings.TrimSpace(cmd.TraceID); id != "" && f.TraceID == "" {
 			f.TraceID = id
@@ -150,12 +153,16 @@ func (s *ImportService) Import(ctx context.Context, cmd ImportCommand) (ImportRe
 			return
 		}
 		fields := logger.FieldsFromContext(tracedCtx)
+		auditUserID := userIDStr
+		if auditUserID == "" {
+			auditUserID = fields.UserID
+		}
 		meta["account_id"] = string(cmd.AccountID)
 		if safeFileName != "" {
 			meta["file_name"] = safeFileName
 		}
 		s.audit.BestEffortLog(tracedCtx, domain.AuditEvent{
-			UserID:     fields.UserID,
+			UserID:     auditUserID,
 			Action:     domain.AuditActionStatementImported,
 			Status:     status,
 			RequestID:  fields.RequestID,
@@ -164,7 +171,8 @@ func (s *ImportService) Import(ctx context.Context, cmd ImportCommand) (ImportRe
 		})
 	}
 
-	if strings.TrimSpace(string(cmd.AccountID)) == "" {
+	if userIDStr == "" || strings.TrimSpace(string(cmd.AccountID)) == "" {
+		recordAudit(domain.AuditStatusFailure, string(cmd.AccountID), map[string]string{"reason": "missing_user_or_account"})
 		return ImportResult{}, ErrAccountNotFound
 	}
 	if cmd.Reader == nil {
@@ -179,10 +187,10 @@ func (s *ImportService) Import(ctx context.Context, cmd ImportCommand) (ImportRe
 		return ImportResult{}, err
 	}
 
-	target, err := s.repo.GetTargetAccount(tracedCtx, cmd.AccountID)
+	target, err := s.repo.GetTargetAccount(tracedCtx, cmd.UserID, cmd.AccountID)
 	if err != nil {
-		log.WarnContext(tracedCtx, "statement import failed: target account lookup", slog.String("error", err.Error()))
-		recordAudit(domain.AuditStatusFailure, string(cmd.AccountID), map[string]string{"format": format, "reason": "account_lookup_failed"})
+		log.WarnContext(tracedCtx, "statement import failed: target account lookup or ownership check", slog.String("error", err.Error()))
+		recordAudit(domain.AuditStatusFailure, string(cmd.AccountID), map[string]string{"format": format, "reason": "account_not_found_or_forbidden"})
 		return ImportResult{}, err
 	}
 

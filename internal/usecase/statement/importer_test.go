@@ -22,7 +22,7 @@ type stubImportRepo struct {
 	target usecasestmt.ImportTargetAccount
 }
 
-func (s stubImportRepo) GetTargetAccount(_ context.Context, _ domain.AccountID) (usecasestmt.ImportTargetAccount, error) {
+func (s stubImportRepo) GetTargetAccount(_ context.Context, _ domain.UserID, _ domain.AccountID) (usecasestmt.ImportTargetAccount, error) {
 	return s.target, nil
 }
 func (s stubImportRepo) ImportStream(
@@ -71,9 +71,9 @@ func TestImportServiceRecordsTechLogsAndAuditEvent(t *testing.T) {
 	csvData := "account_number;booked_at;amount;currency;external_id;description;counterparty\n" +
 		"40817810000000000001;2026-11-20;-100.00;RUB;op-1;Оплата;Магазин\n"
 	res, err := svc.Import(ctx, usecasestmt.ImportCommand{
-		AccountID: "acc-uuid-1",
-		FileName:  "/tmp/secret_path/november.csv",
-		Reader:    strings.NewReader(csvData),
+		UserID: "user-uuid-7", AccountID: "acc-uuid-1",
+		FileName: "/tmp/secret_path/november.csv",
+		Reader:   strings.NewReader(csvData),
 	})
 	if err != nil {
 		t.Fatalf("Import failed: %v", err)

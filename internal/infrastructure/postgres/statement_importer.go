@@ -50,9 +50,10 @@ func isValidUUIDString(s string) bool {
 	return true
 }
 
-func (r *StatementImportRepository) GetTargetAccount(ctx context.Context, accountID domain.AccountID) (usecasestmt.ImportTargetAccount, error) {
-	rawID := strings.TrimSpace(string(accountID))
-	if !isValidUUIDString(rawID) {
+func (r *StatementImportRepository) GetTargetAccount(ctx context.Context, userID domain.UserID, accountID domain.AccountID) (usecasestmt.ImportTargetAccount, error) {
+	rawUserID := strings.TrimSpace(string(userID))
+	rawAccID := strings.TrimSpace(string(accountID))
+	if !isValidUUIDString(rawUserID) || !isValidUUIDString(rawAccID) {
 		return usecasestmt.ImportTargetAccount{}, usecasestmt.ErrAccountNotFound
 	}
 	var (
@@ -60,7 +61,10 @@ func (r *StatementImportRepository) GetTargetAccount(ctx context.Context, accoun
 		accNum   string
 		currCode string
 	)
-	err := r.db.QueryRow(ctx, "SELECT id::text, account_number, currency_code FROM accounts WHERE id = $1::uuid", rawID).Scan(&idStr, &accNum, &currCode)
+	err := r.db.QueryRow(ctx,
+		"SELECT id::text, account_number, currency_code FROM accounts WHERE id = $1::uuid AND user_id = $2::uuid",
+		rawAccID, rawUserID,
+	).Scan(&idStr, &accNum, &currCode)
 	if err != nil {
 		return usecasestmt.ImportTargetAccount{}, repositoryError(err, usecasestmt.ErrAccountNotFound, domain.ErrInvalidModel)
 	}
@@ -70,7 +74,6 @@ func (r *StatementImportRepository) GetTargetAccount(ctx context.Context, accoun
 		Currency:      money.Currency(currCode),
 	}, nil
 }
-
 func (r *StatementImportRepository) ImportStream(
 	ctx context.Context,
 	target usecasestmt.ImportTargetAccount,
