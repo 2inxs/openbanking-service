@@ -3,6 +3,7 @@ package banksync
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/2inxs/openbanking-service/internal/domain"
 )
@@ -16,6 +17,20 @@ type ConnectionRepository interface {
 	Create(context.Context, domain.BankConnection) (domain.BankConnection, error)
 	Get(context.Context, domain.UserID, domain.BankConnectionID) (domain.BankConnection, error)
 	GetByBank(context.Context, domain.UserID, domain.BankID) (domain.BankConnection, error)
+	// UpdateSyncState requires the version returned by Get; a stale version is a conflict.
+	UpdateSyncState(context.Context, domain.UserID, domain.BankConnectionID, int64, ConnectionSyncState) (domain.BankConnection, error)
+}
+
+type IDGenerator interface {
+	NewID() (string, error)
+}
+
+type ConnectionSyncState struct {
+	Status domain.ConnectionStatusID
+	// nil preserves the last successful sync time; an older timestamp is ignored.
+	LastSyncedAt *time.Time
+	// Use a safe message or code, never a raw bank response or credential.
+	LastSyncError string
 }
 
 type AccountRepository interface {

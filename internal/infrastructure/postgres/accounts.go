@@ -43,7 +43,7 @@ func scanAccount(row pgx.Row) (domain.Account, error) {
 	var asOf *time.Time
 	if err := row.Scan(&a.ID, &a.UserID, &a.BankID, &a.ConnectionID, &a.ExternalAccountID,
 		&a.Number, &a.Name, &typ, &status, &a.Currency, &balance, &asOf); err != nil {
-		return a, repositoryError(err, account.ErrNotFound, account.ErrConflict)
+		return a, repositoryError(err, domain.ErrAccountNotFound, domain.ErrAccountConflict)
 	}
 	for id, text := range accountTypes {
 		if text == typ {
@@ -144,8 +144,8 @@ func (r *AccountRepository) UpsertExternal(ctx context.Context, a domain.Account
  AND accounts.currency_code=EXCLUDED.currency_code
  AND (accounts.account_number IS NULL OR EXCLUDED.account_number IS NULL OR accounts.account_number=EXCLUDED.account_number)
  RETURNING `+accountColumns, accountArgs(a)...))
-	if errors.Is(err, account.ErrNotFound) {
-		return domain.Account{}, account.ErrConflict
+	if errors.Is(err, domain.ErrAccountNotFound) {
+		return domain.Account{}, domain.ErrAccountConflict
 	}
 	return result, err
 }
@@ -163,7 +163,7 @@ func (r *AccountRepository) ListByUser(ctx context.Context, user domain.UserID) 
 	}
 	rows, err := r.db.Query(ctx, `SELECT `+accountColumns+` FROM accounts WHERE user_id=$1 ORDER BY id`, string(user))
 	if err != nil {
-		return nil, repositoryError(err, account.ErrNotFound, account.ErrConflict)
+		return nil, repositoryError(err, domain.ErrAccountNotFound, domain.ErrAccountConflict)
 	}
 	defer rows.Close()
 	result := make([]domain.Account, 0)
@@ -175,7 +175,7 @@ func (r *AccountRepository) ListByUser(ctx context.Context, user domain.UserID) 
 		result = append(result, a)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, repositoryError(err, account.ErrNotFound, account.ErrConflict)
+		return nil, repositoryError(err, domain.ErrAccountNotFound, domain.ErrAccountConflict)
 	}
 	return result, nil
 }
@@ -193,11 +193,11 @@ func (r *AccountRepository) BindExternal(ctx context.Context, user domain.UserID
  AND (external_account_id IS NULL OR external_account_id=$4)
  AND EXISTS (SELECT 1 FROM bank_connections c WHERE c.id=$3 AND c.user_id=accounts.user_id AND c.bank_id=accounts.bank_id)
  RETURNING `+accountColumns, string(user), string(id), string(connection), external))
-	if errors.Is(err, account.ErrNotFound) {
+	if errors.Is(err, domain.ErrAccountNotFound) {
 		if _, getErr := r.Get(ctx, user, id); getErr != nil {
 			return domain.Account{}, getErr
 		}
-		return domain.Account{}, account.ErrConflict
+		return domain.Account{}, domain.ErrAccountConflict
 	}
 	return a, err
 }
@@ -213,7 +213,7 @@ func (r *AccountRepository) UpdateBalance(ctx context.Context, user domain.UserI
  WHERE user_id=$1 AND id=$2 AND currency_code=$5 AND (balance_as_of IS NULL OR balance_as_of <= $4)`,
 		string(user), string(id), b.Value.Amount.String(), b.AsOf, string(b.Value.Currency))
 	if err != nil {
-		return repositoryError(err, account.ErrNotFound, account.ErrConflict)
+		return repositoryError(err, domain.ErrAccountNotFound, domain.ErrAccountConflict)
 	}
 	if tag.RowsAffected() == 0 {
 		a, err := r.Get(ctx, user, id)

@@ -40,12 +40,14 @@ func optional(field, value string) error {
 }
 
 type BankConnection struct {
-	ID           BankConnectionID
-	UserID       UserID
-	BankID       BankID
-	CustomerID   BankCustomerID // Может отсутствовать, если банк не выдаёт ID клиента.
-	Status       ConnectionStatusID
-	LastSyncedAt *time.Time
+	ID            BankConnectionID
+	UserID        UserID
+	BankID        BankID
+	CustomerID    BankCustomerID // Может отсутствовать, если банк не выдаёт ID клиента.
+	Status        ConnectionStatusID
+	LastSyncedAt  *time.Time
+	LastSyncError string // Только безопасное описание, без токенов и банковских реквизитов.
+	Version       int64
 }
 
 func (c BankConnection) Validate() error {
@@ -66,6 +68,9 @@ func (c BankConnection) Validate() error {
 	}
 	if c.LastSyncedAt != nil && c.LastSyncedAt.IsZero() {
 		return invalid("connection.last_synced_at", "must be absent or a real timestamp")
+	}
+	if c.Version < 0 {
+		return invalid("connection.version", "must not be negative")
 	}
 	return nil
 }
