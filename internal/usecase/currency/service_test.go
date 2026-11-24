@@ -169,3 +169,123 @@ func TestRefresherRecoversFromPanicAndContinues(t *testing.T) {
 		t.Fatalf("expected nil on cancel, got %v", err)
 	}
 }
+
+func TestSlowRefreshDoesNotRollbackNewerSyncByDateCache(t *testing.T) {
+	const usd = money.Currency("USD")
+	nov24 := time.Date(2026, 11, 24, 0, 0, 0, 0, time.UTC)
+	nov25 := time.Date(2026, 11, 25, 0, 0, 0, 0, time.UTC)
+
+	refreshStarted := make(chan struct{})
+	releaseRefresh := make(chan struct{})
+
+	provider := &stubProvider{
+		fetchLatestFn: func(ctx context.Context) (domain.DailyRates, error) {
+			close(refreshStarted)
+			<-releaseRefresh
+			return domain.DailyRates{
+				Date: nov24,
+				Rates: map[money.Currency]domain.ExchangeRate{
+					usd: {Currency: usd, RateDate: nov24, RUBPerUnit: big.NewRat(90, 1)},
+				},
+			}, nil
+		},
+		fetchByDateFn: func(ctx context.Context, date time.Time) (domain.DailyRates, error) {
+			return domain.DailyRates{
+				Date: nov25,
+				Rates: map[money.Currency]domain.ExchangeRate{
+					usd: {Currency: usd, RateDate: nov25, RUBPerUnit: big.NewRat(95, 1)},
+				},
+			}, nil
+		},
+	}
+
+	repo := newStubRepo()
+	rateCache := cache.NewRateCache()
+	svc := NewService(provider, repo).WithCache(rateCache)
+	ctx := context.Background()
+
+	refreshDone := make(chan error, 1)
+	go func() {
+		refreshDone <- svc.Refresh(ctx)
+	}()
+
+	<-refreshStarted
+
+	if err := svc.SyncByDate(ctx, nov25); err != nil {
+		t.Fatalf("SyncByDate(nov25) failed: %v", err)
+	}
+
+	close(releaseRefresh)
+	if err := <-refreshDone; err != nil {
+		t.Fatalf("slow Refresh failed: %v", err)
+	}
+
+	got, err := svc.GetRate(ctx, usd, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.RateDate.Equal(nov25) || got.RUBPerUnit.Cmp(big.NewRat(95, 1)) != 0 {
+		t.Fatalf("cache rolled back to stale date: got %v on %v, want 95 on %v", got.RUBPerUnit, got.RateDate, nov25)
+	}
+}
+
+func TestConcurrentRefreshesCompletingOutOfOrderKeepNewestRate(t *testing.T) {
+	const usd = money.Currency("USD")
+	nov24 := time.Date(2026, 11, 24, 0, 0, 0, 0, time.UTC)
+	nov25 := time.Date(2026, 11, 25, 0, 0, 0, 0, time.UTC)
+
+	var calls atomic.Int32
+	slowStarted := make(chan struct{})
+	releaseSlow := make(chan struct{})
+
+	provider := &stubProvider{
+		fetchLatestFn: func(ctx context.Context) (domain.DailyRates, error) {
+			n := calls.Add(1)
+			if n == 1 {
+				close(slowStarted)
+				<-releaseSlow
+				return domain.DailyRates{
+					Date: nov24,
+					Rates: map[money.Currency]domain.ExchangeRate{
+						usd: {Currency: usd, RateDate: nov24, RUBPerUnit: big.NewRat(90, 1)},
+					},
+				}, nil
+			}
+			return domain.DailyRates{
+				Date: nov25,
+				Rates: map[money.Currency]domain.ExchangeRate{
+					usd: {Currency: usd, RateDate: nov25, RUBPerUnit: big.NewRat(96, 1)},
+				},
+			}, nil
+		},
+	}
+
+	repo := newStubRepo()
+	rateCache := cache.NewRateCache()
+	svc := NewService(provider, repo).WithCache(rateCache)
+	ctx := context.Background()
+
+	slowDone := make(chan error, 1)
+	go func() {
+		slowDone <- svc.Refresh(ctx)
+	}()
+
+	<-slowStarted
+
+	if err := svc.Refresh(ctx); err != nil {
+		t.Fatalf("fast newer Refresh failed: %v", err)
+	}
+
+	close(releaseSlow)
+	if err := <-slowDone; err != nil {
+		t.Fatalf("slow older Refresh failed: %v", err)
+	}
+
+	got, err := svc.GetRate(ctx, usd, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.RateDate.Equal(nov25) || got.RUBPerUnit.Cmp(big.NewRat(96, 1)) != 0 {
+		t.Fatalf("cache rolled back after out-of-order Refresh: got %v on %v, want 96 on %v", got.RUBPerUnit, got.RateDate, nov25)
+	}
+}
