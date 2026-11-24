@@ -176,7 +176,7 @@ func (r *StatementImportRepository) ImportStream(
 
 		copyRows := make([][]any, 0, len(chunk.Rows))
 		for _, row := range chunk.Rows {
-			dedupKey := computeStatementDedupKey(target.ID, row, inFileOccurrence)
+			dedupKey := computeStatementDedupKey(target.ID, importID, row)
 			var extID any
 			if strings.TrimSpace(row.ExternalID) != "" {
 				extID = strings.TrimSpace(row.ExternalID)
@@ -316,21 +316,22 @@ func (r *StatementImportRepository) ImportStream(
 		SkippedCount:  skippedCount,
 	}, nil
 }
-func computeStatementDedupKey(accountID domain.AccountID, row usecasestmt.TransactionRow, occurrences map[string]int) string {
+func computeStatementDedupKey(accountID domain.AccountID, importID string, row usecasestmt.TransactionRow) string {
 	ext := strings.TrimSpace(row.ExternalID)
 	if ext != "" {
 		sum := sha256.Sum256([]byte(fmt.Sprintf("v1|%s|ext|%s", accountID, ext)))
 		return hex.EncodeToString(sum[:])
 	}
-	base := fmt.Sprintf("v1|%s|row|%s|%s|%s|%s|%s",
+	// Для операций без external_id привязываем ключ к конкретному импорту и номеру строки,
+	// чтобы два реальных одинаковых платежа в один день из разных выписок не склеивались,
+	// а повторная загрузка того же файла отсекалась по (account_id, file_sha256).
+	sum := sha256.Sum256([]byte(fmt.Sprintf("v1|%s|import|%s|line|%d|%s|%s|%s",
 		accountID,
+		importID,
+		row.RowNumber,
 		row.BookedAt.UTC().Format(time.RFC3339Nano),
 		row.Value.Amount.String(),
 		row.Value.Currency,
-		strings.TrimSpace(row.Description),
-		strings.TrimSpace(row.CounterpartyName),
-	)
-	occurrences[base]++
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|occ|%d", base, occurrences[base])))
+	)))
 	return hex.EncodeToString(sum[:])
 }

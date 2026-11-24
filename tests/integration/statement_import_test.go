@@ -196,4 +196,41 @@ func TestStreamStatementImportCopyFromIdempotencyAndAtomicity(t *testing.T) {
 	}); !errors.Is(err, usecasestmt.ErrAccountCurrencyMismatch) {
 		t.Fatalf("expected ErrAccountCurrencyMismatch, got %v", err)
 	}
+
+	// 7. Два реальных одинаковых платежа без external_id в один день из двух разных выписок оба сохраняются без потерь.
+	var beforeNoExt int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM transactions WHERE account_id = $1::uuid`, string(accountID)).Scan(&beforeNoExt); err != nil {
+		t.Fatal(err)
+	}
+	morningNoExt := "account_number;booked_at;amount;currency;external_id;description;counterparty\n" +
+		"40817810000000000001;2026-11-22;-300.00;RUB;;Кофе;Кофейня\n"
+	eveningNoExt := "account_number;booked_at;amount;currency;external_id;description;counterparty\n" +
+		"40817810000000000001;2026-11-22;-300.00;RUB;;Кофе;Кофейня\n"
+
+	rA, err := svc.Import(ctx, usecasestmt.ImportCommand{
+		UserID:    ownerUserID,
+		AccountID: accountID,
+		FileName:  "morning_no_ext.csv",
+		Reader:    strings.NewReader(morningNoExt),
+	})
+	if err != nil || rA.ImportedCount != 1 {
+		t.Fatalf("first no-external-id payment import failed: err=%v res=%+v", err, rA)
+	}
+	rB, err := svc.Import(ctx, usecasestmt.ImportCommand{
+		UserID:    ownerUserID,
+		AccountID: accountID,
+		FileName:  "evening_no_ext.csv",
+		Reader:    strings.NewReader(eveningNoExt),
+	})
+	if err != nil || rB.ImportedCount != 1 {
+		t.Fatalf("second identical no-external-id payment must not be lost: err=%v res=%+v", err, rB)
+	}
+
+	var afterNoExt int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM transactions WHERE account_id = $1::uuid`, string(accountID)).Scan(&afterNoExt); err != nil {
+		t.Fatal(err)
+	}
+	if afterNoExt != beforeNoExt+2 {
+		t.Fatalf("expected +2 transactions for two separate no-external-id files, got %d (was %d)", afterNoExt, beforeNoExt)
+	}
 }
