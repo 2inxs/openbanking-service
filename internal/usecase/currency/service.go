@@ -27,6 +27,10 @@ type RateRepository interface {
 	GetRate(ctx context.Context, curr money.Currency, date *time.Time) (domain.ExchangeRate, error)
 }
 
+type supportedCurrencyLister interface {
+	SupportedCurrencies(ctx context.Context) (map[money.Currency]struct{}, error)
+}
+
 type RateCache interface {
 	Replace(daily domain.DailyRates, fetchedAt time.Time)
 	Get(curr money.Currency) (domain.ExchangeRate, bool)
@@ -52,6 +56,27 @@ func NewService(provider RateProvider, repo RateRepository) *Service {
 func (s *Service) WithCache(c RateCache) *Service {
 	s.cache = c
 	return s
+}
+
+func (s *Service) filterSupported(ctx context.Context, daily domain.DailyRates) (domain.DailyRates, error) {
+	lister, ok := s.repo.(supportedCurrencyLister)
+	if !ok {
+		return daily, nil
+	}
+	supported, err := lister.SupportedCurrencies(ctx)
+	if err != nil {
+		return domain.DailyRates{}, err
+	}
+	filtered := make(map[money.Currency]domain.ExchangeRate, len(daily.Rates))
+	for code, rate := range daily.Rates {
+		if _, exists := supported[code]; exists {
+			filtered[code] = rate
+		}
+	}
+	return domain.DailyRates{
+		Date:  daily.Date,
+		Rates: filtered,
+	}, nil
 }
 
 // Warmup загружает последний сохранённый курс из БД при старте
@@ -82,12 +107,16 @@ func (s *Service) Refresh(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("currency: fetch latest rates: %w", err)
 	}
-	if err := s.repo.SaveBatch(ctx, daily); err != nil {
+	filtered, err := s.filterSupported(ctx, daily)
+	if err != nil {
+		return fmt.Errorf("currency: filter supported rates: %w", err)
+	}
+	if err := s.repo.SaveBatch(ctx, filtered); err != nil {
 		return fmt.Errorf("currency: save rates batch: %w", err)
 	}
-	// Кеш обновляем строго после успешного сохранения в БД.
+	// Кеш обновляем строго тем же согласованным набором валют после успешного сохранения в БД.
 	if s.cache != nil {
-		s.cache.Replace(daily, s.nowFn().UTC())
+		s.cache.Replace(filtered, s.nowFn().UTC())
 	}
 	return nil
 }
@@ -100,13 +129,17 @@ func (s *Service) SyncByDate(ctx context.Context, date time.Time) error {
 	if err != nil {
 		return fmt.Errorf("currency: fetch rates by date: %w", err)
 	}
-	if err := s.repo.SaveBatch(ctx, daily); err != nil {
+	filtered, err := s.filterSupported(ctx, daily)
+	if err != nil {
+		return fmt.Errorf("currency: filter supported rates: %w", err)
+	}
+	if err := s.repo.SaveBatch(ctx, filtered); err != nil {
 		return fmt.Errorf("currency: save rates batch: %w", err)
 	}
 	if s.cache != nil {
 		currentDate, _, ok := s.cache.Meta()
-		if !ok || !daily.Date.Before(currentDate) {
-			s.cache.Replace(daily, s.nowFn().UTC())
+		if !ok || !filtered.Date.Before(currentDate) {
+			s.cache.Replace(filtered, s.nowFn().UTC())
 		}
 	}
 	return nil

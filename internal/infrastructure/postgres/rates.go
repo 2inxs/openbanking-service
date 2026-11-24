@@ -31,6 +31,31 @@ func normalizeRateDay(t time.Time) time.Time {
 	return time.Date(u.Year(), u.Month(), u.Day(), 0, 0, 0, 0, time.UTC)
 }
 
+func (r *RateRepository) SupportedCurrencies(ctx context.Context) (map[money.Currency]struct{}, error) {
+	return loadSupportedCurrencies(ctx, r.db)
+}
+
+func loadSupportedCurrencies(ctx context.Context, q DBTX) (map[money.Currency]struct{}, error) {
+	rows, err := q.Query(ctx, `SELECT code FROM currencies`)
+	if err != nil {
+		return nil, repositoryError(err, currency.ErrRateNotFound, domain.ErrInvalidModel)
+	}
+	defer rows.Close()
+
+	supported := make(map[money.Currency]struct{})
+	for rows.Next() {
+		var code string
+		if err := rows.Scan(&code); err != nil {
+			return nil, repositoryError(err, currency.ErrRateNotFound, domain.ErrInvalidModel)
+		}
+		supported[money.Currency(code)] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, repositoryError(err, currency.ErrRateNotFound, domain.ErrInvalidModel)
+	}
+	return supported, nil
+}
+
 func (r *RateRepository) SaveBatch(ctx context.Context, daily domain.DailyRates) error {
 	if daily.Date.IsZero() {
 		return domain.ErrInvalidModel
@@ -43,7 +68,8 @@ func (r *RateRepository) SaveBatch(ctx context.Context, daily domain.DailyRates)
 	}
 	sort.Slice(codes, func(i, j int) bool { return codes[i] < codes[j] })
 
-	// 1. Валидируем весь пакет до любых обращений к БД.
+	maxNumeric := new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(14), nil))
+
 	validated := make([]domain.ExchangeRate, 0, len(codes))
 	for _, code := range codes {
 		rate := daily.Rates[code]
@@ -56,7 +82,6 @@ func (r *RateRepository) SaveBatch(ctx context.Context, daily domain.DailyRates)
 		if !normalizeRateDay(rate.RateDate).Equal(expectedDay) {
 			return domain.ErrInvalidModel
 		}
-		maxNumeric := new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(14), nil))
 		if rate.RUBPerUnit.Cmp(maxNumeric) >= 0 {
 			return domain.ErrInvalidModel
 		}
@@ -67,7 +92,6 @@ func (r *RateRepository) SaveBatch(ctx context.Context, daily domain.DailyRates)
 		return nil
 	}
 
-	// 2. Выполняем сохранение атомарно в одной транзакции.
 	if beginner, ok := r.db.(txBeginner); ok {
 		tx, err := beginner.Begin(ctx)
 		if err != nil {
@@ -88,26 +112,10 @@ func (r *RateRepository) SaveBatch(ctx context.Context, daily domain.DailyRates)
 }
 
 func saveRatesAtomic(ctx context.Context, execDB DBTX, rateDate time.Time, rates []domain.ExchangeRate) error {
-	// Читаем поддерживаемые валюты из справочника БД, чтобы отфильтровать
-	// лишние валюты из ответа ЦБ (например, AUD) без нарушения FK и без потери атомарности.
-	rows, err := execDB.Query(ctx, `SELECT code FROM currencies`)
+	supported, err := loadSupportedCurrencies(ctx, execDB)
 	if err != nil {
-		return repositoryError(err, currency.ErrRateNotFound, domain.ErrInvalidModel)
+		return err
 	}
-	supported := make(map[money.Currency]struct{})
-	for rows.Next() {
-		var code string
-		if err := rows.Scan(&code); err != nil {
-			rows.Close()
-			return repositoryError(err, currency.ErrRateNotFound, domain.ErrInvalidModel)
-		}
-		supported[money.Currency(code)] = struct{}{}
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return repositoryError(err, currency.ErrRateNotFound, domain.ErrInvalidModel)
-	}
-	rows.Close()
 
 	var (
 		colCodes []string
@@ -131,7 +139,6 @@ func saveRatesAtomic(ctx context.Context, execDB DBTX, rateDate time.Time, rates
 		return nil
 	}
 
-	// Одиночный INSERT ... unnest гарантирует атомарную вставку/обновление всего пакета.
 	_, err = execDB.Exec(ctx, `INSERT INTO exchange_rates (currency_code, rate_date, rub_per_unit, fetched_at)
  SELECT code, dt::date, rate::numeric, now()
  FROM unnest($1::varchar[], $2::text[], $3::text[]) AS t(code, dt, rate)

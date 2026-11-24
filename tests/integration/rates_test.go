@@ -5,9 +5,11 @@ package integration_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,40 +19,93 @@ import (
 	"github.com/2inxs/openbanking-service/internal/infrastructure/cbr"
 	"github.com/2inxs/openbanking-service/internal/infrastructure/postgres"
 	"github.com/2inxs/openbanking-service/internal/usecase/currency"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type stubRateProvider struct {
-	daily domain.DailyRates
+type publicRatesSnapshot struct {
+	count int
+	sum   string
 }
 
-func (s stubRateProvider) FetchLatest(_ context.Context) (domain.DailyRates, error) {
-	return s.daily, nil
-}
-
-func (s stubRateProvider) FetchByDate(_ context.Context, _ time.Time) (domain.DailyRates, error) {
-	return s.daily, nil
-}
-
-func cleanupRatesDates(t *testing.T, ctx context.Context, pool interface {
-	Exec(context.Context, string, ...any) (interface{ RowsAffected() int64 }, error)
-}) {
+func snapshotPublicExchangeRates(t *testing.T, ctx context.Context, pool *pgxpool.Pool) publicRatesSnapshot {
 	t.Helper()
+	var snap publicRatesSnapshot
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*), COALESCE(SUM(rub_per_unit), 0)::text FROM public.exchange_rates`).Scan(&snap.count, &snap.sum); err != nil {
+		t.Fatalf("snapshot public.exchange_rates: %v", err)
+	}
+	return snap
+}
+
+func isolatedRatesPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	ctx := context.Background()
+
+	adminPool := repositoryPool(t)
+	beforeSnap := snapshotPublicExchangeRates(t, ctx, adminPool)
+
+	schema := "test_rates_" + strings.ReplaceAll(newID(t), "-", "")
+	setupSQL := fmt.Sprintf(`
+CREATE SCHEMA %s;
+CREATE TABLE %s.currencies (
+code varchar(3) PRIMARY KEY
+);
+INSERT INTO %s.currencies (code) VALUES ('RUB'), ('USD'), ('EUR'), ('JPY');
+CREATE TABLE %s.exchange_rates (
+currency_code varchar(3) NOT NULL REFERENCES %s.currencies(code),
+rate_date date NOT NULL,
+rub_per_unit numeric(24,10) NOT NULL,
+fetched_at timestamptz NOT NULL DEFAULT (now()),
+CONSTRAINT exchange_rates_positive_finite CHECK (rub_per_unit > 0 AND rub_per_unit NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)),
+PRIMARY KEY (currency_code, rate_date)
+);`, schema, schema, schema, schema, schema)
+
+	if _, err := adminPool.Exec(ctx, setupSQL); err != nil {
+		t.Fatalf("create isolated schema %s: %v", schema, err)
+	}
+
+	cfg := databaseConfig(t)
+	poolCfg, err := pgxpool.ParseConfig(cfg.URL)
+	if err != nil {
+		t.Fatalf("parse pool config: %v", err)
+	}
+	poolCfg.MaxConns = 4
+	poolCfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		_, err := conn.Exec(ctx, fmt.Sprintf(`SET search_path TO %s, public`, schema))
+		return err
+	}
+
+	isolatedPool, err := pgxpool.NewWithConfig(ctx, poolCfg)
+	if err != nil {
+		t.Fatalf("create isolated pool: %v", err)
+	}
+
+	t.Cleanup(func() {
+		isolatedPool.Close()
+
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if _, err := adminPool.Exec(cleanupCtx, fmt.Sprintf(`DROP SCHEMA IF EXISTS %s CASCADE`, schema)); err != nil {
+			t.Errorf("drop isolated schema %s: %v", schema, err)
+		}
+
+		afterSnap := snapshotPublicExchangeRates(t, cleanupCtx, adminPool)
+		if afterSnap != beforeSnap {
+			t.Errorf("public.exchange_rates changed during test: before=%+v after=%+v", beforeSnap, afterSnap)
+		}
+	})
+
+	return isolatedPool
 }
 
 func TestRateRepositoryUpsertSameDateAndDateFallback(t *testing.T) {
 	ctx := context.Background()
-	pool := repositoryPool(t)
+	pool := isolatedRatesPool(t)
 	repo := postgres.NewRateRepository(pool)
 
 	day1 := time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC)
-	day2 := time.Date(2026, 11, 23, 0, 0, 0, 0, time.UTC)
 
-	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DELETE FROM exchange_rates WHERE rate_date IN ($1::date, $2::date)`,
-			day1.Format("2006-01-02"), day2.Format("2006-01-02"))
-	})
-
-	// 1. Первичная запись на 20 ноября.
 	if err := repo.SaveBatch(ctx, domain.DailyRates{
 		Date: day1,
 		Rates: map[money.Currency]domain.ExchangeRate{
@@ -61,7 +116,6 @@ func TestRateRepositoryUpsertSameDateAndDateFallback(t *testing.T) {
 		t.Fatalf("SaveBatch day1: %v", err)
 	}
 
-	// 2. Повторная запись той же валюты USD на ту же дату (20 ноября) с новым курсом -> проверка ON CONFLICT DO UPDATE без дублей.
 	if err := repo.SaveBatch(ctx, domain.DailyRates{
 		Date: day1,
 		Rates: map[money.Currency]domain.ExchangeRate{
@@ -80,7 +134,6 @@ func TestRateRepositoryUpsertSameDateAndDateFallback(t *testing.T) {
 		t.Fatalf("expected exactly 1 row for USD on %s after upsert, got %d", day1.Format("2006-01-02"), count)
 	}
 
-	// 3. Запрос на выходной день (22 ноября) возвращает обновлённый курс за 20 ноября (<= 22 ноября).
 	weekend := time.Date(2026, 11, 22, 0, 0, 0, 0, time.UTC)
 	weekendUSD, err := repo.GetRate(ctx, money.Currency("USD"), &weekend)
 	if err != nil {
@@ -90,7 +143,6 @@ func TestRateRepositoryUpsertSameDateAndDateFallback(t *testing.T) {
 		t.Fatalf("unexpected weekend USD after upsert: %+v (%s)", weekendUSD, weekendUSD.RUBPerUnitString())
 	}
 
-	// 4. Запрос до самой ранней даты возвращает ErrRateNotFound.
 	beforeAll := time.Date(2026, 11, 19, 0, 0, 0, 0, time.UTC)
 	if _, err := repo.GetRate(ctx, money.Currency("USD"), &beforeAll); !errors.Is(err, currency.ErrRateNotFound) {
 		t.Fatalf("expected ErrRateNotFound before all dates, got %v", err)
@@ -99,18 +151,12 @@ func TestRateRepositoryUpsertSameDateAndDateFallback(t *testing.T) {
 
 func TestRateRepositorySaveBatchAtomicityAndDateMismatch(t *testing.T) {
 	ctx := context.Background()
-	pool := repositoryPool(t)
+	pool := isolatedRatesPool(t)
 	repo := postgres.NewRateRepository(pool)
 
 	day := time.Date(2026, 11, 24, 0, 0, 0, 0, time.UTC)
 	otherDay := time.Date(2026, 11, 23, 0, 0, 0, 0, time.UTC)
 
-	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DELETE FROM exchange_rates WHERE rate_date IN ($1::date, $2::date)`,
-			day.Format("2006-01-02"), otherDay.Format("2006-01-02"))
-	})
-
-	// Сохраняем исходный курс EUR на 24 ноября.
 	if err := repo.SaveBatch(ctx, domain.DailyRates{
 		Date: day,
 		Rates: map[money.Currency]domain.ExchangeRate{
@@ -120,7 +166,6 @@ func TestRateRepositorySaveBatchAtomicityAndDateMismatch(t *testing.T) {
 		t.Fatalf("initial SaveBatch: %v", err)
 	}
 
-	// 1. Ошибка валидации на второй валюте (USD имеет отрицательный курс): EUR не должен перезаписаться, новых строк быть не должно.
 	err := repo.SaveBatch(ctx, domain.DailyRates{
 		Date: day,
 		Rates: map[money.Currency]domain.ExchangeRate{
@@ -140,7 +185,6 @@ func TestRateRepositorySaveBatchAtomicityAndDateMismatch(t *testing.T) {
 		t.Fatalf("EUR was partially updated on validation error: got %s, want 98.0000000000", eurAfterValidationErr.RUBPerUnitString())
 	}
 
-	// 2. Несовпадение даты отдельного курса с daily.Date отклоняет весь пакет целиком.
 	err = repo.SaveBatch(ctx, domain.DailyRates{
 		Date: day,
 		Rates: map[money.Currency]domain.ExchangeRate{
@@ -163,7 +207,6 @@ func TestRateRepositorySaveBatchAtomicityAndDateMismatch(t *testing.T) {
 		t.Fatalf("USD should not exist after rejected batch, got %v", err)
 	}
 
-	// 3. Ошибка SQL (отменённый контекст или закрытая транзакция) не оставляет частичных изменений.
 	canceledCtx, cancel := context.WithCancel(ctx)
 	cancel()
 	if err := repo.SaveBatch(canceledCtx, domain.DailyRates{
@@ -176,17 +219,13 @@ func TestRateRepositorySaveBatchAtomicityAndDateMismatch(t *testing.T) {
 	}
 }
 
-func TestCBRClientRefreshSavesSupportedCurrenciesToInitialSchemaAndWarmsUp(t *testing.T) {
+func TestCBRClientRefreshConsistentBetweenDBAndCacheAcrossRestart(t *testing.T) {
 	ctx := context.Background()
-	pool := repositoryPool(t)
+	pool := isolatedRatesPool(t)
 	repo := postgres.NewRateRepository(pool)
 
 	cbrDate := time.Date(2026, 11, 25, 0, 0, 0, 0, time.UTC)
-	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DELETE FROM exchange_rates WHERE rate_date = $1::date`, cbrDate.Format("2006-01-02"))
-	})
 
-	// Ответ ЦБ содержит как валюты из начального справочника БД (USD, EUR, JPY), так и отсутствующую в БД AUD.
 	xmlPayload := `<?xml version="1.0" encoding="UTF-8"?>
 <ValCurs Date="25.11.2026" name="Foreign Currency Market">
 <Valute ID="R01010">
@@ -230,32 +269,39 @@ func TestCBRClientRefreshSavesSupportedCurrenciesToInitialSchemaAndWarmsUp(t *te
 	defer srv.Close()
 
 	client := cbr.NewClient(cbr.WithEndpoint(srv.URL))
-
 	rateCache := cache.NewRateCache()
 	svc := currency.NewService(client, repo).WithCache(rateCache)
 
-	// Штатный Refresh должен успешно сохранить USD, EUR, JPY, отфильтровав AUD без ошибки FK.
 	if err := svc.Refresh(ctx); err != nil {
 		t.Fatalf("Refresh with CBR response containing AUD failed: %v", err)
 	}
 
-	usd, err := repo.GetRate(ctx, money.Currency("USD"), &cbrDate)
-	if err != nil || usd.RUBPerUnitString() != "92.3456000000" {
-		t.Fatalf("unexpected USD in DB: err=%v rate=%+v", err, usd)
+	usdLatest, err := svc.GetRate(ctx, money.Currency("USD"), nil)
+	if err != nil || usdLatest.RUBPerUnitString() != "92.3456000000" {
+		t.Fatalf("unexpected USD latest via service: err=%v rate=%+v", err, usdLatest)
 	}
-	jpy, err := repo.GetRate(ctx, money.Currency("JPY"), &cbrDate)
-	if err != nil || jpy.RUBPerUnitString() != "0.6150000000" {
-		t.Fatalf("unexpected JPY in DB: err=%v rate=%+v", err, jpy)
+	jpyByDate, err := svc.GetRate(ctx, money.Currency("JPY"), &cbrDate)
+	if err != nil || jpyByDate.RUBPerUnitString() != "0.6150000000" {
+		t.Fatalf("unexpected JPY by date via service: err=%v rate=%+v", err, jpyByDate)
 	}
 
-	// Имитируем перезапуск сервиса: новый RateCache прогревается из PostgreSQL через Warmup.
+	if _, err := svc.GetRate(ctx, money.Currency("AUD"), nil); !errors.Is(err, currency.ErrRateNotFound) {
+		t.Fatalf("expected ErrRateNotFound for AUD without date (must not be in cache), got %v", err)
+	}
+	if _, err := svc.GetRate(ctx, money.Currency("AUD"), &cbrDate); !errors.Is(err, currency.ErrRateNotFound) {
+		t.Fatalf("expected ErrRateNotFound for AUD by date, got %v", err)
+	}
+
 	restartedCache := cache.NewRateCache()
 	restartedSvc := currency.NewService(client, repo).WithCache(restartedCache)
 	if _, err := restartedSvc.Warmup(ctx); err != nil {
 		t.Fatalf("Warmup from postgres failed: %v", err)
 	}
-	warmedUSD, ok := restartedCache.Get(money.Currency("USD"))
-	if !ok || warmedUSD.RUBPerUnitString() != "92.3456000000" {
-		t.Fatalf("Warmup did not restore USD rate: ok=%v rate=%+v", ok, warmedUSD)
+	warmedUSD, err := restartedSvc.GetRate(ctx, money.Currency("USD"), nil)
+	if err != nil || warmedUSD.RUBPerUnitString() != "92.3456000000" {
+		t.Fatalf("unexpected USD after restart: err=%v rate=%+v", err, warmedUSD)
+	}
+	if _, err := restartedSvc.GetRate(ctx, money.Currency("AUD"), nil); !errors.Is(err, currency.ErrRateNotFound) {
+		t.Fatalf("expected ErrRateNotFound for AUD after restart, got %v", err)
 	}
 }
