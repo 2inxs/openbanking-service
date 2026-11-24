@@ -89,7 +89,7 @@ func (p *XLSXParser) Parse(r io.Reader) (usecasestmt.ParsedStatement, error) {
 		return usecasestmt.ParsedStatement{}, usecasestmt.ErrEmptyStatement
 	}
 
-	displayHeader := trimTrailingEmpty(allRows)
+	displayHeader := trimTrailingEmpty(allRows[0])
 	if len(displayHeader) != len(expectedStatementHeader) {
 		return usecasestmt.ParsedStatement{}, fmt.Errorf("%w: expected %d columns, got %d", usecasestmt.ErrInvalidHeader, len(expectedStatementHeader), len(displayHeader))
 	}

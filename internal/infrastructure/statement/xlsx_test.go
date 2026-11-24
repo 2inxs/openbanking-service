@@ -334,7 +334,7 @@ func TestXLSXParserPreservesRowCoordinatesAcrossSkippedEmptyRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse with skipped empty row failed: %v", err)
 	}
-	if len(got.Transactions) != 1 || got.Transactions.RowNumber != 3 || got.Transactions.ExternalID != "op-row-3" {
+	if len(got.Transactions) != 1 || got.Transactions[0].RowNumber != 3 || got.Transactions[0].ExternalID != "op-row-3" {
 		t.Fatalf("unexpected row mapping across empty row: %+v", got.Transactions)
 	}
 }
