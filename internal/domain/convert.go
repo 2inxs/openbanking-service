@@ -10,12 +10,13 @@ import (
 
 // ConversionResult содержит результат точной конвертации суммы через RUB.
 type ConversionResult struct {
-	Source        money.Money
-	Target        money.Money
-	EffectiveRate *big.Rat
-	RateDate      time.Time
-	FromRateDate  time.Time
-	ToRateDate    time.Time
+	Source            money.Money
+	Target            money.Money
+	EffectiveRate     *big.Rat
+	RateDate          time.Time
+	FromRateDate      time.Time
+	ToRateDate        time.Time
+	ZeroAfterRounding bool
 }
 
 // EffectiveRateString форматирует итоговый кросс-курс с точностью ExchangeRateScale (10 знаков).
@@ -56,12 +57,13 @@ func ConvertViaRUB(src money.Money, fromRate, toRate ExchangeRate, places int) (
 			return ConversionResult{}, err
 		}
 		return ConversionResult{
-			Source:        src,
-			Target:        money.Money{Amount: rounded, Currency: toRate.Currency},
-			EffectiveRate: big.NewRat(1, 1),
-			RateDate:      effectiveDate,
-			FromRateDate:  fromRate.RateDate,
-			ToRateDate:    toRate.RateDate,
+			Source:            src,
+			Target:            money.Money{Amount: rounded, Currency: toRate.Currency},
+			EffectiveRate:     big.NewRat(1, 1),
+			RateDate:          effectiveDate,
+			FromRateDate:      fromRate.RateDate,
+			ToRateDate:        toRate.RateDate,
+			ZeroAfterRounding: src.Amount.Sign() != 0 && rounded.Sign() == 0,
 		}, nil
 	}
 
@@ -76,11 +78,12 @@ func ConvertViaRUB(src money.Money, fromRate, toRate ExchangeRate, places int) (
 	}
 
 	return ConversionResult{
-		Source:        src,
-		Target:        money.Money{Amount: targetAmount, Currency: toRate.Currency},
-		EffectiveRate: crossRate,
-		RateDate:      effectiveDate,
-		FromRateDate:  fromRate.RateDate,
-		ToRateDate:    toRate.RateDate,
+		Source:            src,
+		Target:            money.Money{Amount: targetAmount, Currency: toRate.Currency},
+		EffectiveRate:     crossRate,
+		RateDate:          effectiveDate,
+		FromRateDate:      fromRate.RateDate,
+		ToRateDate:        toRate.RateDate,
+		ZeroAfterRounding: src.Amount.Sign() != 0 && targetAmount.Sign() == 0,
 	}, nil
 }

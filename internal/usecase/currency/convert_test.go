@@ -88,4 +88,26 @@ func TestServiceConvertDirectionsAndEdgeCases(t *testing.T) {
 	}); !errors.Is(err, currency.ErrInvalidCurrency) {
 		t.Fatalf("expected ErrInvalidCurrency, got %v", err)
 	}
+
+	// 7. Pointer to zero time.Time{} returns domain.ErrInvalidModel
+	zeroTime := time.Time{}
+	if _, err := svc.Convert(ctx, currency.ConvertRequest{
+		Amount: money.Money{Amount: amt100, Currency: "USD"},
+		To:     money.RUB,
+		Date:   &zeroTime,
+	}); !errors.Is(err, domain.ErrInvalidModel) {
+		t.Fatalf("expected ErrInvalidModel for zero pointer date, got %v", err)
+	}
+
+	// 8. Tiny non-zero amount rounded to zero sets ZeroAfterRounding = true
+	tinyRUB, _ := money.Parse("0.0100")
+	places2 := 2
+	resTiny, err := svc.Convert(ctx, currency.ConvertRequest{
+		Amount: money.Money{Amount: tinyRUB, Currency: money.RUB},
+		To:     "USD",
+		Places: &places2,
+	})
+	if err != nil || resTiny.Target.Amount.String() != "0.0000" || !resTiny.ZeroAfterRounding {
+		t.Fatalf("expected ZeroAfterRounding=true for 0.01 RUB -> USD (2 places), got err=%v res=%+v", err, resTiny)
+	}
 }
