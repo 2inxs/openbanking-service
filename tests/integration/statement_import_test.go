@@ -52,7 +52,7 @@ VALUES ('%s'::uuid, 'mockbank', 'Mock Bank');
 INSERT INTO %s.bank_connections (id, user_id, bank_id, status)
 VALUES ('%s'::uuid, '%s'::uuid, '%s'::uuid, 'active');
 INSERT INTO %s.accounts (id, user_id, bank_id, bank_connection_id, external_account_id, account_number, name, type, status, currency_code)
-VALUES ('%s'::uuid, '%s'::uuid, '%s'::uuid, '%s'::uuid, 'ext-acc-1', '40817810000000000001', 'Основной счёт', 'checking', 'active', 'RUB');
+VALUES ('%s'::uuid, '%s'::uuid, '%s'::uuid, '%s'::uuid, 'ext-acc-1', '40817810000000000001', 'Основной счёт', 'current', 'active', 'RUB');
 `, schema, userID, schema, bankID, schema, connID, userID, bankID, schema, accountID, userID, bankID, connID)
 
 	if _, err := adminPool.Exec(ctx, seedSQL); err != nil {
