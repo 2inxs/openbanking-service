@@ -150,7 +150,7 @@ func TestStreamStatementImportCopyFromIdempotencyAndAtomicity(t *testing.T) {
 	if !errors.Is(err, usecasestmt.ErrValidationFailed) {
 		t.Fatalf("expected ErrValidationFailed on broken tail, got %v", err)
 	}
-	if len(res3.RowErrors) != 1 || res3.RowErrors.Row != 2002 {
+	if len(res3.RowErrors) != 1 || res3.RowErrors[0].Row != 2002 {
 		t.Fatalf("expected RowError at line 2002, got %+v", res3.RowErrors)
 	}
 
