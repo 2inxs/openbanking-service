@@ -171,6 +171,10 @@ func (s *ImportService) Import(ctx context.Context, cmd ImportCommand) (ImportRe
 		})
 	}
 
+	if ctxUser := strings.TrimSpace(logger.FieldsFromContext(ctx).UserID); ctxUser != "" && userIDStr != "" && ctxUser != userIDStr {
+		recordAudit(domain.AuditStatusFailure, string(cmd.AccountID), map[string]string{"reason": "user_context_mismatch"})
+		return ImportResult{}, ErrAccountNotFound
+	}
 	if userIDStr == "" || strings.TrimSpace(string(cmd.AccountID)) == "" {
 		recordAudit(domain.AuditStatusFailure, string(cmd.AccountID), map[string]string{"reason": "missing_user_or_account"})
 		return ImportResult{}, ErrAccountNotFound

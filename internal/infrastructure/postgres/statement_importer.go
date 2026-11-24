@@ -57,23 +57,33 @@ func (r *StatementImportRepository) GetTargetAccount(ctx context.Context, userID
 		return usecasestmt.ImportTargetAccount{}, usecasestmt.ErrAccountNotFound
 	}
 	var (
-		idStr    string
-		accNum   string
-		currCode string
+		idStr      string
+		accNum     *string
+		currCode   string
+		status     string
+		isArchived bool
 	)
 	err := r.db.QueryRow(ctx,
-		"SELECT id::text, account_number, currency_code FROM accounts WHERE id = $1::uuid AND user_id = $2::uuid",
+		"SELECT id::text, account_number, currency_code, status, is_archived FROM accounts WHERE id = $1::uuid AND user_id = $2::uuid",
 		rawAccID, rawUserID,
-	).Scan(&idStr, &accNum, &currCode)
+	).Scan(&idStr, &accNum, &currCode, &status, &isArchived)
 	if err != nil {
 		return usecasestmt.ImportTargetAccount{}, repositoryError(err, usecasestmt.ErrAccountNotFound, domain.ErrInvalidModel)
 	}
+	if isArchived || status == string(domain.AccountClosed) {
+		return usecasestmt.ImportTargetAccount{}, fmt.Errorf("%w: target account is closed or archived", domain.ErrInvalidModel)
+	}
+	var number string
+	if accNum != nil {
+		number = *accNum
+	}
 	return usecasestmt.ImportTargetAccount{
 		ID:            domain.AccountID(idStr),
-		AccountNumber: accNum,
+		AccountNumber: number,
 		Currency:      money.Currency(currCode),
 	}, nil
 }
+
 func (r *StatementImportRepository) ImportStream(
 	ctx context.Context,
 	target usecasestmt.ImportTargetAccount,
@@ -149,7 +159,8 @@ func (r *StatementImportRepository) ImportStream(
 		if err := ensureTx(); err != nil {
 			return usecasestmt.ImportResult{}, err
 		}
-		if strings.TrimSpace(chunk.AccountNumber) != strings.TrimSpace(target.AccountNumber) {
+		if strings.TrimSpace(target.AccountNumber) != "" &&
+			strings.TrimSpace(chunk.AccountNumber) != strings.TrimSpace(target.AccountNumber) {
 			return usecasestmt.ImportResult{}, fmt.Errorf("%w: got %q, want %q", usecasestmt.ErrAccountNumberMismatch, chunk.AccountNumber, target.AccountNumber)
 		}
 		if chunk.Currency != target.Currency {
@@ -211,17 +222,28 @@ func (r *StatementImportRepository) ImportStream(
 		return usecasestmt.ImportResult{}, usecasestmt.ErrEmptyStatement
 	}
 
-	// Проверяем идемпотентность по уникальному индексу statement_imports_file_uq (account_id, file_sha256):
-	// если этот файл уже был успешно импортирован ранее, возвращаем существующий ImportID без повторной вставки.
-	var (
-		existingImportID string
-		prevImported     int
-		prevSkipped      int
-	)
-	checkDupSQL := "SELECT id::text, imported_count, skipped_count FROM statement_imports " +
-		"WHERE account_id = $1::uuid AND file_sha256 = $2 AND status <> 'failed' LIMIT 1"
-	err := tx.QueryRow(ctx, checkDupSQL, string(target.ID), fileSHA256).Scan(&existingImportID, &prevImported, &prevSkipped)
-	if err == nil {
+	safeFileName := strings.TrimSpace(fileName)
+	if safeFileName == "" {
+		safeFileName = "statement.csv"
+	}
+	if len(safeFileName) > 255 {
+		safeFileName = safeFileName[:255]
+	}
+
+	// Атомарно резервируем запись в statement_imports с защитой от гонки параллельных загрузок того же файла.
+	var importID string
+	insertImportSQL := "INSERT INTO statement_imports (account_id, file_name, file_sha256, status) " +
+		"VALUES ($1::uuid, $2, $3, 'processing') " +
+		"ON CONFLICT (account_id, file_sha256) WHERE status <> 'failed' DO NOTHING " +
+		"RETURNING id::text"
+	err := tx.QueryRow(ctx, insertImportSQL, string(target.ID), safeFileName, fileSHA256).Scan(&importID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		var existingImportID string
+		findExistingSQL := "SELECT id::text FROM statement_imports " +
+			"WHERE account_id = $1::uuid AND file_sha256 = $2 AND status <> 'failed' LIMIT 1"
+		if findErr := tx.QueryRow(ctx, findExistingSQL, string(target.ID), fileSHA256).Scan(&existingImportID); findErr != nil {
+			return usecasestmt.ImportResult{}, repositoryError(findErr, usecasestmt.ErrAccountNotFound, domain.ErrInvalidModel)
+		}
 		if commitErr := tx.Commit(ctx); commitErr != nil {
 			return usecasestmt.ImportResult{}, repositoryError(commitErr, usecasestmt.ErrAccountNotFound, domain.ErrInvalidModel)
 		}
@@ -237,22 +259,6 @@ func (r *StatementImportRepository) ImportStream(
 			SkippedCount:  totalReceived,
 		}, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return usecasestmt.ImportResult{}, repositoryError(err, usecasestmt.ErrAccountNotFound, domain.ErrInvalidModel)
-	}
-
-	safeFileName := strings.TrimSpace(fileName)
-	if safeFileName == "" {
-		safeFileName = "statement.csv"
-	}
-	if len(safeFileName) > 255 {
-		safeFileName = safeFileName[:255]
-	}
-
-	var importID string
-	insertImportSQL := "INSERT INTO statement_imports (account_id, file_name, file_sha256, status) " +
-		"VALUES ($1::uuid, $2, $3, 'processing') RETURNING id::text"
-	err = tx.QueryRow(ctx, insertImportSQL, string(target.ID), safeFileName, fileSHA256).Scan(&importID)
 	if err != nil {
 		return usecasestmt.ImportResult{}, repositoryError(err, usecasestmt.ErrAccountNotFound, domain.ErrInvalidModel)
 	}
@@ -296,11 +302,9 @@ func (r *StatementImportRepository) ImportStream(
 	if err != nil {
 		return usecasestmt.ImportResult{}, repositoryError(err, usecasestmt.ErrAccountNotFound, domain.ErrInvalidModel)
 	}
-
 	if err := tx.Commit(ctx); err != nil {
 		return usecasestmt.ImportResult{}, repositoryError(err, usecasestmt.ErrAccountNotFound, domain.ErrInvalidModel)
 	}
-
 	return usecasestmt.ImportResult{
 		ImportID:      domain.StatementImportID(importID),
 		AccountID:     target.ID,
@@ -308,7 +312,6 @@ func (r *StatementImportRepository) ImportStream(
 		SkippedCount:  skippedCount,
 	}, nil
 }
-
 func computeStatementDedupKey(accountID domain.AccountID, row usecasestmt.TransactionRow, occurrences map[string]int) string {
 	ext := strings.TrimSpace(row.ExternalID)
 	if ext != "" {
