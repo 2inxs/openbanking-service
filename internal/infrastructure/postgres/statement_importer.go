@@ -139,7 +139,7 @@ func (r *StatementImportRepository) ImportStream(
 		return nil
 	}
 
-	inFileOccurrence := make(map[string]int)
+	var importID string
 	var (
 		totalReceived int
 		chunkIndex    int
@@ -235,7 +235,6 @@ func (r *StatementImportRepository) ImportStream(
 	}
 
 	// Атомарно резервируем запись в statement_imports с защитой от гонки параллельных загрузок того же файла.
-	var importID string
 	insertImportSQL := "INSERT INTO statement_imports (account_id, file_name, file_sha256, status) " +
 		"VALUES ($1::uuid, $2, $3, 'processing') " +
 		"ON CONFLICT (account_id, file_sha256) WHERE status <> 'failed' DO NOTHING " +
