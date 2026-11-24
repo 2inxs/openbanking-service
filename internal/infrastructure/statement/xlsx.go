@@ -16,12 +16,11 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
-// MaxUnzippedBytes защищает от ZIP-бомб при распаковке XLSX-архива (50 МБ).
 const MaxUnzippedBytes = 50 << 20
 
 const (
-	minExcelSerialDate = 1.0           // 1900-01-01
-	maxExcelSerialDate = 2958465.99999 // 9999-12-31
+	minExcelSerialDate = 1.0
+	maxExcelSerialDate = 2958465.99999
 )
 
 var ErrFormulaNotAllowed = errors.New("statement: formulas are not allowed in XLSX cells")
@@ -82,44 +81,31 @@ func (p *XLSXParser) Parse(r io.Reader) (usecasestmt.ParsedStatement, error) {
 	}
 	date1904 := wbProps.Date1904 != nil && *wbProps.Date1904
 
-	rows, err := f.Rows(sheetName)
+	allRows, err := f.GetRows(sheetName)
 	if err != nil {
 		return usecasestmt.ParsedStatement{}, fmt.Errorf("%w: read rows: %v", usecasestmt.ErrMalformedFile, err)
 	}
-	defer func() { _ = rows.Close() }()
-
-	if !rows.Next() {
-		if err := rows.Error(); err != nil {
-			return usecasestmt.ParsedStatement{}, fmt.Errorf("%w: %v", usecasestmt.ErrMalformedFile, err)
-		}
+	if len(allRows) == 0 {
 		return usecasestmt.ParsedStatement{}, usecasestmt.ErrEmptyStatement
 	}
 
+	displayHeader := trimTrailingEmpty(allRows)
+	if len(displayHeader) != len(expectedStatementHeader) {
+		return usecasestmt.ParsedStatement{}, fmt.Errorf("%w: expected %d columns, got %d", usecasestmt.ErrInvalidHeader, len(expectedStatementHeader), len(displayHeader))
+	}
 	header, err := readRawRow(f, sheetName, 1, len(expectedStatementHeader))
 	if err != nil {
 		return usecasestmt.ParsedStatement{}, fmt.Errorf("%w: read header: %v", usecasestmt.ErrMalformedFile, err)
-	}
-	// Проверяем, нет ли лишних непустых колонок в заголовке.
-	displayHeader, err := rows.Columns()
-	if err != nil {
-		return usecasestmt.ParsedStatement{}, fmt.Errorf("%w: read header columns: %v", usecasestmt.ErrMalformedFile, err)
-	}
-	if len(displayHeader) != len(expectedStatementHeader) {
-		return usecasestmt.ParsedStatement{}, fmt.Errorf("%w: expected %d columns, got %d", usecasestmt.ErrInvalidHeader, len(expectedStatementHeader), len(displayHeader))
 	}
 	if err := validateHeader(header); err != nil {
 		return usecasestmt.ParsedStatement{}, err
 	}
 
 	var stmt usecasestmt.ParsedStatement
-	rowNumber := 1
 
-	for rows.Next() {
-		rowNumber++
-		displayCols, err := rows.Columns()
-		if err != nil {
-			return usecasestmt.ParsedStatement{}, fmt.Errorf("%w at row %d: %v", usecasestmt.ErrMalformedFile, rowNumber, err)
-		}
+	for idx := 1; idx < len(allRows); idx++ {
+		rowNumber := idx + 1
+		displayCols := trimTrailingEmpty(allRows[idx])
 
 		rawCols, err := readRawRow(f, sheetName, rowNumber, len(expectedStatementHeader))
 		if err != nil {
@@ -167,10 +153,6 @@ func (p *XLSXParser) Parse(r io.Reader) (usecasestmt.ParsedStatement, error) {
 		stmt.Transactions = append(stmt.Transactions, tx)
 	}
 
-	if err := rows.Error(); err != nil {
-		return usecasestmt.ParsedStatement{}, fmt.Errorf("%w: %v", usecasestmt.ErrMalformedFile, err)
-	}
-
 	if len(stmt.Transactions) == 0 && len(stmt.RowErrors) == 0 {
 		return usecasestmt.ParsedStatement{}, usecasestmt.ErrEmptyStatement
 	}
@@ -182,7 +164,14 @@ func (p *XLSXParser) Parse(r io.Reader) (usecasestmt.ParsedStatement, error) {
 	return stmt, nil
 }
 
-// validateFirstSheetXML проверяет, что первый XML-лист в архиве не обрезан и имеет корректную структуру XML.
+func trimTrailingEmpty(cols []string) []string {
+	end := len(cols)
+	for end > 0 && strings.TrimSpace(cols[end-1]) == "" {
+		end--
+	}
+	return cols[:end]
+}
+
 func validateFirstSheetXML(archive []byte, maxUnzipBytes int64) error {
 	zr, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
 	if err != nil {
@@ -201,7 +190,6 @@ func validateFirstSheetXML(archive []byte, maxUnzipBytes int64) error {
 		}
 	}
 	if sheetFile == nil {
-		// Если лист назван иначе, проверим все XML в xl/worksheets/.
 		for _, zf := range zr.File {
 			if strings.HasPrefix(zf.Name, "xl/worksheets/") && strings.HasSuffix(zf.Name, ".xml") {
 				sheetFile = zf

@@ -322,3 +322,19 @@ func TestXLSXParserRejectsFormulasAndInvalidRows(t *testing.T) {
 		t.Fatalf("expected RowError on row 2, got %+v", got.RowErrors)
 	}
 }
+
+func TestXLSXParserPreservesRowCoordinatesAcrossSkippedEmptyRows(t *testing.T) {
+	rows := [][]any{
+		{"account_number", "booked_at", "amount", "currency", "external_id", "description", "counterparty"},
+		nil,
+		{"40817810000000000001", "2026-11-20", "-250.00", "RUB", "op-row-3", "Операция на 3-й строке", "Shop"},
+	}
+
+	got, err := statement.NewXLSXParser().Parse(buildXLSX(t, rows, nil))
+	if err != nil {
+		t.Fatalf("Parse with skipped empty row failed: %v", err)
+	}
+	if len(got.Transactions) != 1 || got.Transactions.RowNumber != 3 || got.Transactions.ExternalID != "op-row-3" {
+		t.Fatalf("unexpected row mapping across empty row: %+v", got.Transactions)
+	}
+}
