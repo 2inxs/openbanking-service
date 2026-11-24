@@ -11,8 +11,15 @@ import (
 )
 
 // Config contains the settings needed to start and stop the API.
+type RatesConfig struct {
+	RefreshInterval time.Duration
+	RetryInterval   time.Duration
+	RequestTimeout  time.Duration
+}
+
 type Config struct {
 	Database              DatabaseConfig
+	Rates                 RatesConfig
 	HTTPAddr              string
 	HTTPReadHeaderTimeout time.Duration
 	HTTPReadTimeout       time.Duration
@@ -39,6 +46,11 @@ func Load() (Config, error) {
 			ConnectTimeout: 5 * time.Second, StartupTimeout: 10 * time.Second,
 			StatementTimeout: 30 * time.Second,
 		},
+		Rates: RatesConfig{
+			RefreshInterval: time.Hour,
+			RetryInterval:   5 * time.Minute,
+			RequestTimeout:  10 * time.Second,
+		},
 		HTTPAddr:              "127.0.0.1:8080",
 		HTTPReadHeaderTimeout: 5 * time.Second,
 		HTTPReadTimeout:       15 * time.Second,
@@ -47,6 +59,7 @@ func Load() (Config, error) {
 		ShutdownTimeout:       10 * time.Second,
 		LogLevel:              "info",
 	}
+
 	if strings.TrimSpace(cfg.Database.URL) == "" {
 		return Config{}, fmt.Errorf("DATABASE_URL is required")
 	}
@@ -91,6 +104,9 @@ func Load() (Config, error) {
 		{"DB_CONNECT_TIMEOUT", &cfg.Database.ConnectTimeout},
 		{"DB_STARTUP_TIMEOUT", &cfg.Database.StartupTimeout},
 		{"DB_STATEMENT_TIMEOUT", &cfg.Database.StatementTimeout},
+		{"RATES_REFRESH_INTERVAL", &cfg.Rates.RefreshInterval},
+		{"RATES_RETRY_INTERVAL", &cfg.Rates.RetryInterval},
+		{"RATES_REQUEST_TIMEOUT", &cfg.Rates.RequestTimeout},
 	} {
 		value := os.Getenv(setting.name)
 		if value == "" {
