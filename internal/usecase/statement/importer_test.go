@@ -52,7 +52,7 @@ func TestImportServiceRecordsTechLogsAndAuditEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	auditRepo := memory.NewAuditRepository(techLog)
+	auditRepo := memory.NewAuditRepoWithLogger(techLog)
 	auditRecorder := usecase.NewAuditRecorder(auditRepo, nil, techLog)
 	repo := stubImportRepo{
 		target: usecasestmt.ImportTargetAccount{
@@ -97,11 +97,11 @@ func TestImportServiceRecordsTechLogsAndAuditEvent(t *testing.T) {
 		t.Fatalf("expected sanitized base file_name, got %v", lastRecord["file_name"])
 	}
 	// 2. Проверяем запись бизнес-аудита AuditActionStatementImported.
-	events := auditRepo.ListByUser("user-uuid-7", 10)
+	events := auditRepo.ListByUser("user-uuid-7")
 	if len(events) != 1 {
 		t.Fatalf("expected 1 audit event recorded, got %d", len(events))
 	}
-	ev := events
+	ev := events[0]
 	if ev.Action != domain.AuditActionStatementImported || ev.Status != domain.AuditStatusSuccess {
 		t.Fatalf("unexpected audit action/status: %+v", ev)
 	}
