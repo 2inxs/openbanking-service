@@ -130,6 +130,8 @@ func (s *ImportService) Import(ctx context.Context, cmd ImportCommand) (ImportRe
 	startedAt := time.Now()
 	safeFileName := sanitizeLogFileName(cmd.FileName)
 	userIDStr := strings.TrimSpace(string(cmd.UserID))
+	cmd.UserID = domain.UserID(userIDStr)
+	cmd.AccountID = domain.AccountID(strings.TrimSpace(string(cmd.AccountID)))
 
 	tracedCtx := logger.WithFields(ctx, func(f *logger.ContextFields) {
 		if f.Job == "" {

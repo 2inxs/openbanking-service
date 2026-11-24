@@ -128,6 +128,10 @@ func (r *StatementImportRepository) ImportStream(
 		if err != nil {
 			return repositoryError(err, usecasestmt.ErrAccountNotFound, domain.ErrInvalidModel)
 		}
+		var lockedID string
+		if err = tx.QueryRow(ctx, "SELECT id::text FROM accounts WHERE id = $1::uuid FOR UPDATE", string(target.ID)).Scan(&lockedID); err != nil {
+			return repositoryError(err, usecasestmt.ErrAccountNotFound, domain.ErrInvalidModel)
+		}
 		if _, err = tx.Exec(ctx, createTempSQL); err != nil {
 			return repositoryError(err, usecasestmt.ErrAccountNotFound, domain.ErrInvalidModel)
 		}
