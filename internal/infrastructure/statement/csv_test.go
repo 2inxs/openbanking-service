@@ -160,3 +160,13 @@ func TestCSVParserRejectsInvalidUTF8BytesWithRowNumber(t *testing.T) {
 		t.Fatalf("expected RowError at row 3 for invalid UTF-8, got %+v", got.RowErrors)
 	}
 }
+
+func TestCSVParserRejectsBrokenQuotesInFirstFieldWithoutPanic(t *testing.T) {
+	raw := "account_number;booked_at;amount;currency;external_id;description;counterparty\n" +
+		"broken\"account;2026-11-20;1.00;RUB;id;test;shop\n"
+
+	_, err := statement.NewCSVParser().Parse(strings.NewReader(raw))
+	if !errors.Is(err, usecasestmt.ErrMalformedFile) {
+		t.Fatalf("expected ErrMalformedFile on broken quotes in first field, got %v", err)
+	}
+}

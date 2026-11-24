@@ -81,17 +81,17 @@ func (p *CSVParser) Parse(r io.Reader) (usecasestmt.ParsedStatement, error) {
 			break
 		}
 
-		line, _ := reader.FieldPos(0)
-		if line <= 0 {
-			line = 1
-		}
-
 		if err != nil {
 			var parseErr *csv.ParseError
 			if errors.As(err, &parseErr) {
 				return usecasestmt.ParsedStatement{}, fmt.Errorf("%w at row %d: %v", usecasestmt.ErrMalformedFile, parseErr.Line, parseErr.Err)
 			}
-			return usecasestmt.ParsedStatement{}, fmt.Errorf("%w at row %d: %v", usecasestmt.ErrMalformedFile, line, err)
+			return usecasestmt.ParsedStatement{}, fmt.Errorf("%w: %v", usecasestmt.ErrMalformedFile, err)
+		}
+
+		line, _ := reader.FieldPos(0)
+		if line <= 0 {
+			line = 1
 		}
 
 		if len(stmt.Transactions)+len(stmt.RowErrors) >= p.maxRows {
