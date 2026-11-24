@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/2inxs/openbanking-service/internal/domain/money"
-	"://github.com"
 	"github.com/2inxs/openbanking-service/internal/infrastructure/statement"
 )
 
