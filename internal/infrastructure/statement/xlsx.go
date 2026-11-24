@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	usecasestmt "github.com/2inxs/openbanking-service/internal/usecase/statement"
 	"github.com/xuri/excelize/v2"
@@ -148,6 +149,14 @@ func (p *XLSXParser) Parse(r io.Reader) (usecasestmt.ParsedStatement, error) {
 		tx, rowErr := normalizeRow(rowNumber, rawCols, &stmt.AccountNumber, &stmt.Currency, dateParser)
 		if rowErr != nil {
 			stmt.RowErrors = append(stmt.RowErrors, *rowErr)
+			continue
+		}
+		if utf8.RuneCountInString(tx.ExternalID) > 255 {
+			stmt.RowErrors = append(stmt.RowErrors, usecasestmt.RowError{Row: rowNumber, Message: "external_id exceeds 255 characters"})
+			continue
+		}
+		if utf8.RuneCountInString(tx.CounterpartyName) > 255 {
+			stmt.RowErrors = append(stmt.RowErrors, usecasestmt.RowError{Row: rowNumber, Message: "counterparty exceeds 255 characters"})
 			continue
 		}
 		stmt.Transactions = append(stmt.Transactions, tx)

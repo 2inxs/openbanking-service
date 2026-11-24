@@ -60,14 +60,26 @@ func (r *StatementImportRepository) ImportStream(
 		return usecasestmt.ImportResult{}, ErrUnavailable
 	}
 
-	tx, err := beginner.Begin(ctx)
-	if err != nil {
-		return usecasestmt.ImportResult{}, repositoryError(err, usecasestmt.ErrAccountNotFound, domain.ErrInvalidModel)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	var (
+		tx      pgx.Tx
+		txReady bool
+	)
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback(ctx)
+		}
+	}()
 
-	// Создаём временную таблицу без индексов и WAL-нагрузки для сверхбыстрой загрузки через COPY.
-	_, err = tx.Exec(ctx, `CREATE TEMP TABLE tmp_statement_tx (
+	ensureTx := func() error {
+		if txReady {
+			return nil
+		}
+		var err error
+		tx, err = beginner.Begin(ctx)
+		if err != nil {
+			return repositoryError(err, usecasestmt.ErrAccountNotFound, domain.ErrInvalidModel)
+		}
+		_, err = tx.Exec(ctx, `CREATE TEMP TABLE tmp_statement_tx (
 external_transaction_id varchar(255),
 amount numeric(20,4) NOT NULL,
 currency_code varchar(3) NOT NULL,
@@ -77,8 +89,11 @@ description text,
 counterparty_name varchar(255),
 deduplication_key varchar(64) NOT NULL
 ) ON COMMIT DROP`)
-	if err != nil {
-		return usecasestmt.ImportResult{}, repositoryError(err, usecasestmt.ErrAccountNotFound, domain.ErrInvalidModel)
+		if err != nil {
+			return repositoryError(err, usecasestmt.ErrAccountNotFound, domain.ErrInvalidModel)
+		}
+		txReady = true
+		return nil
 	}
 
 	// Счётчик повторов идентичных бесномерных операций внутри одного файла,
@@ -100,6 +115,9 @@ deduplication_key varchar(64) NOT NULL
 	for chunk := range chunks {
 		if len(chunk.Rows) == 0 {
 			continue
+		}
+		if err := ensureTx(); err != nil {
+			return usecasestmt.ImportResult{}, err
 		}
 		if strings.TrimSpace(chunk.AccountNumber) != strings.TrimSpace(target.AccountNumber) {
 			return usecasestmt.ImportResult{}, fmt.Errorf("%w: got %q, want %q", usecasestmt.ErrAccountNumberMismatch, chunk.AccountNumber, target.AccountNumber)
