@@ -2,6 +2,7 @@ package domain_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -155,4 +156,95 @@ func TestIdenticalRealPaymentsWithoutExternalIDAreNotCollapsed(t *testing.T) {
 	if k1 == k2 {
 		t.Fatalf("two real identical payments without external_id must have distinct keys, got identical %s", k1)
 	}
+}rn
+func TestDeduplicationSecurityAndBoundaryCases(t *testing.T) {
+accID := domain.AccountID("11111111-1111-1111-1111-111111111111")
+booked := time.Date(2026, 11, 22, 11, 0, 0, 0, time.UTC)
+amt := mustAmt(t, "-100.00")
+
+// 1. Максимально допустимая длина external_id = 255 проходит; 256 отклоняется с ErrInvalidModel.
+maxExt := strings.Repeat("x", 255)
+if _, _, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
+AccountID:  accID,
+Source:     domain.SourceOpenBanking,
+ExternalID: maxExt,
+Amount:     amt,
+Currency:   money.RUB,
+BookedAt:   &booked,
+}); err != nil {
+t.Fatalf("expected 255-char external_id to pass, got %v", err)
 }
+
+if _, _, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
+AccountID:  accID,
+Source:     domain.SourceOpenBanking,
+ExternalID: strings.Repeat("x", 256),
+Amount:     amt,
+Currency:   money.RUB,
+BookedAt:   &booked,
+}); !errors.Is(err, domain.ErrInvalidModel) {
+t.Fatalf("expected ErrInvalidModel for 256-char external_id, got %v", err)
+}
+
+// 2. Управляющие символы (\n, \x00) отклоняются (защита от log/delimiter injection).
+if _, _, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
+AccountID:  accID,
+Source:     domain.SourceOpenBanking,
+ExternalID: "tx-1\ninjected",
+Amount:     amt,
+Currency:   money.RUB,
+BookedAt:   &booked,
+}); !errors.Is(err, domain.ErrInvalidModel) {
+t.Fatalf("expected ErrInvalidModel for control chars in external_id, got %v", err)
+}
+
+// 3. Отсутствие обеих дат (BookedAt == nil && ValueAt == nil) отклоняется с ErrInvalidModel.
+if _, _, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
+AccountID:  accID,
+Source:     domain.SourceOpenBanking,
+ExternalID: "tx-no-date",
+Amount:     amt,
+Currency:   money.RUB,
+}); !errors.Is(err, domain.ErrInvalidModel) {
+t.Fatalf("expected ErrInvalidModel when both BookedAt and ValueAt are nil, got %v", err)
+}
+
+// 4. Pending-операция из API без BookedAt, но с ValueAt проходит корректно.
+if _, strategy, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
+AccountID:  accID,
+Source:     domain.SourceOpenBanking,
+ExternalID: "tx-pending-value-at",
+Amount:     amt,
+Currency:   money.RUB,
+ValueAt:    &booked,
+}); err != nil || strategy != domain.DedupStrategyExternalID {
+t.Fatalf("expected Pending tx with ValueAt to succeed, err=%v strategy=%q", err, strategy)
+}
+
+// 5. Отсутствие коллизий при символе '|' внутри идентификаторов.
+kA, _, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
+AccountID:  "acc|ext",
+Source:     domain.SourceOpenBanking,
+ExternalID: "123",
+Amount:     amt,
+Currency:   money.RUB,
+BookedAt:   &booked,
+})
+if err != nil {
+t.Fatal(err)
+}
+kB, _, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
+AccountID:  "acc",
+Source:     domain.SourceOpenBanking,
+ExternalID: "ext|123",
+Amount:     amt,
+Currency:   money.RUB,
+BookedAt:   &booked,
+})
+if err != nil {
+t.Fatal(err)
+}
+if kA == kB {
+t.Fatalf("delimiter collision detected: kA == kB == %s", kA)
+}
+}rn

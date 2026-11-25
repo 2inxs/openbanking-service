@@ -16,7 +16,7 @@ CREATE UNIQUE INDEX "transactions_dedup_uq" ON "transactions" ("account_id", "de
 Если у операции присутствует непустой `external_id` (после `TrimSpace`), ключ вычисляется исключительно по паре `(account_id, external_id)` независимо от источника (`open_banking` или `statement`):
 
 ```text
-deduplication_key = sha256("v1|" + account_id + "|ext|" + trim(external_id))
+deduplication_key = sha256("v1|acc:" + len(account_id) + ":" + account_id + "|ext:" + len(ext_id) + ":" + ext_id)
 ```
 
 **Следствия:**
@@ -53,7 +53,7 @@ CREATE UNIQUE INDEX "transactions_dedup_uq" ON "transactions" ("account_id", "de
 Если у операции присутствует непустой `external_id` (после `TrimSpace`), ключ вычисляется исключительно по паре `(account_id, external_id)` независимо от источника (`open_banking` или `statement`):
 
 ```text
-deduplication_key = sha256("v1|" + account_id + "|ext|" + trim(external_id))
+deduplication_key = sha256("v1|acc:" + len(account_id) + ":" + account_id + "|ext:" + len(ext_id) + ":" + ext_id)
 ```
 
 **Следствия:**
