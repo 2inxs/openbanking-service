@@ -64,7 +64,7 @@ func ComputeTransactionDeduplicationKey(in DeduplicationInput) (string, Deduplic
 	// При отсутствии external_id одинаковые сумма и дата сами по себе не считаются дубликатом:
 	// для выписки используется позиционный ключ строки импорта, чтобы сохранить два реальных
 	// одинаковых платежа (например, две покупки на одну сумму в один день).
-	if in.Source == TransactionSourceStatement {
+	if in.Source == SourceStatement {
 		impID := strings.TrimSpace(string(in.StatementImportID))
 		if impID == "" || impID != string(in.StatementImportID) || in.RowNumber <= 0 {
 			return "", "", fmt.Errorf("%w: statement import id and positive row number are required without external_id", ErrInsufficientDeduplicationData)

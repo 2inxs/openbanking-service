@@ -16,7 +16,7 @@ func RowDeduplicationKey(
 	booked := row.BookedAt
 	return domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
 		AccountID:         accountID,
-		Source:            domain.TransactionSourceStatement,
+		Source:            domain.SourceStatement,
 		ExternalID:        row.ExternalID,
 		Amount:            row.Value.Amount,
 		Currency:          row.Value.Currency,

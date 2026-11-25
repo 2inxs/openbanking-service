@@ -9,7 +9,7 @@ import (
 func TransactionDeduplicationKey(accountID domain.AccountID, tx BankTransaction) (string, domain.DeduplicationStrategy, error) {
 	return domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
 		AccountID:  accountID,
-		Source:     domain.TransactionSourceOpenBanking,
+		Source:     domain.SourceOpenBanking,
 		ExternalID: tx.ExternalID,
 		Amount:     tx.Value.Amount,
 		Currency:   tx.Value.Currency,

@@ -32,7 +32,7 @@ func TestComputeTransactionDeduplicationKey(t *testing.T) {
 			name: "open_banking_with_external_id",
 			in: domain.DeduplicationInput{
 				AccountID:  accID,
-				Source:     domain.TransactionSourceOpenBanking,
+				Source:     domain.SourceOpenBanking,
 				ExternalID: "tx-bank-001",
 				Amount:     mustAmt(t, "-450.00"),
 				Currency:   money.RUB,
@@ -44,7 +44,7 @@ func TestComputeTransactionDeduplicationKey(t *testing.T) {
 			name: "statement_with_external_id_trimmed",
 			in: domain.DeduplicationInput{
 				AccountID:         accID,
-				Source:            domain.TransactionSourceStatement,
+				Source:            domain.SourceStatement,
 				ExternalID:        "  tx-bank-001  ",
 				Amount:            mustAmt(t, "-450.00"),
 				Currency:          money.RUB,
@@ -58,7 +58,7 @@ func TestComputeTransactionDeduplicationKey(t *testing.T) {
 			name: "statement_without_external_id_uses_line_strategy",
 			in: domain.DeduplicationInput{
 				AccountID:         accID,
-				Source:            domain.TransactionSourceStatement,
+				Source:            domain.SourceStatement,
 				Amount:            mustAmt(t, "-350.00"),
 				Currency:          money.RUB,
 				BookedAt:          &booked,
@@ -71,7 +71,7 @@ func TestComputeTransactionDeduplicationKey(t *testing.T) {
 			name: "open_banking_without_external_id_rejected",
 			in: domain.DeduplicationInput{
 				AccountID: accID,
-				Source:    domain.TransactionSourceOpenBanking,
+				Source:    domain.SourceOpenBanking,
 				Amount:    mustAmt(t, "-350.00"),
 				Currency:  money.RUB,
 				BookedAt:  &booked,
@@ -82,7 +82,7 @@ func TestComputeTransactionDeduplicationKey(t *testing.T) {
 			name: "statement_without_external_id_and_missing_row_rejected",
 			in: domain.DeduplicationInput{
 				AccountID: accID,
-				Source:    domain.TransactionSourceStatement,
+				Source:    domain.SourceStatement,
 				Amount:    mustAmt(t, "-350.00"),
 				Currency:  money.RUB,
 				BookedAt:  &booked,
@@ -128,7 +128,7 @@ func TestIdenticalRealPaymentsWithoutExternalIDAreNotCollapsed(t *testing.T) {
 
 	k1, _, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
 		AccountID:         accID,
-		Source:            domain.TransactionSourceStatement,
+		Source:            domain.SourceStatement,
 		Amount:            amt,
 		Currency:          money.RUB,
 		BookedAt:          &booked,
@@ -141,7 +141,7 @@ func TestIdenticalRealPaymentsWithoutExternalIDAreNotCollapsed(t *testing.T) {
 
 	k2, _, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
 		AccountID:         accID,
-		Source:            domain.TransactionSourceStatement,
+		Source:            domain.SourceStatement,
 		Amount:            amt,
 		Currency:          money.RUB,
 		BookedAt:          &booked,
