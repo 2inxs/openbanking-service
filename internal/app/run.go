@@ -35,5 +35,17 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 
 	application := New(cfg, logger)
 	application.AddWorker(refresher.Run)
+
+	/* Для дальнейшей сборки App
+	mockBankClient, err := openbanking.NewClient(cfg.MockBank.BaseURL, string(cfg.MockBank.Token))
+	bankSvc := banksync.NewService(
+		postgres.NewBankRepository(pool),
+		postgres.NewConnectionRepository(pool),
+		map[domain.BankCode]banksync.BankClient{"mockbank": mockBankClient},
+		identifier.UUIDGenerator{},
+	)
+	demoUser := domain.UserID(cfg.DemoUserID)
+	connectionHandler := httpdelivery.NewBankConnectionHandler(bankSvc, func(*http.Request) domain.UserID { return demoUser })
+	*/
 	return application.Run(ctx)
 }

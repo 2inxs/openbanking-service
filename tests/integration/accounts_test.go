@@ -146,7 +146,8 @@ func TestConnectionRepository(t *testing.T) {
 			t.Fatal(err)
 		}
 		got, err := repo.GetByBank(ctx, u, b)
-		if err != nil || got.ID != created.ID || got.Status != status || got.CustomerID != in.CustomerID || !got.LastSyncedAt.Equal(last) {
+		if err != nil || got.ID != created.ID || got.Status != status || got.CustomerID != in.CustomerID ||
+			!got.LastSyncedAt.Equal(last) || got.BankCode != domain.BankCode(b) || created.BankCode != domain.BankCode(b) {
 			t.Fatalf("connection round trip: %+v, %v", got, err)
 		}
 		other := domain.UserID(newID(t))

@@ -8,6 +8,22 @@ import (
 	"github.com/2inxs/openbanking-service/internal/domain"
 )
 
+type balancesResponse struct {
+	Data balancesData `json:"Data"`
+}
+
+type balancesData struct {
+	Balance []bankBalance `json:"Balance"`
+}
+
+type bankBalance struct {
+	AccountID            string     `json:"accountId"`
+	CreditDebitIndicator string     `json:"creditDebitIndicator"`
+	Type                 string     `json:"type"`
+	DateTime             string     `json:"dateTime"`
+	Amount               bankAmount `json:"Amount"`
+}
+
 const balanceTypeClosingAvailable = "ClosingAvailable"
 
 func normalizeBalance(b bankBalance, accountID string) (domain.BalanceSnapshot, error) {

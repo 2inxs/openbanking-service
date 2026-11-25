@@ -2,7 +2,6 @@ package openbanking
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"github.com/2inxs/openbanking-service/internal/domain"
@@ -10,7 +9,29 @@ import (
 	"github.com/2inxs/openbanking-service/internal/usecase/banksync"
 )
 
-var ErrInvalidBankData = errors.New("invalid bank data")
+type accountsResponse struct {
+	Data accountsData `json:"Data"`
+}
+
+type accountsData struct {
+	Account []bankAccount `json:"Account"`
+}
+
+type bankAccount struct {
+	AccountID          string               `json:"accountId"`
+	Status             string               `json:"status"`
+	Currency           string               `json:"currency"`
+	AccountType        string               `json:"accountType"`
+	AccountSubType     string               `json:"accountSubType"`
+	AccountDescription string               `json:"accountDescription"`
+	AccountDetails     []bankAccountDetails `json:"AccountDetails"`
+}
+
+type bankAccountDetails struct {
+	SchemeName     string `json:"schemeName"`
+	Identification string `json:"identification"`
+	Name           string `json:"name"`
+}
 
 const schemeCBRAccountNumber = "RU.CBR.AccountNumber"
 

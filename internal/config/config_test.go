@@ -21,6 +21,7 @@ func clearSettings(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://postgres@localhost:5432/openBanking?sslmode=disable")
 	t.Setenv("MOCKBANK_BASE_URL", "")
 	t.Setenv("MOCKBANK_DEMO_TOKEN", "")
+	t.Setenv("DEMO_USER_ID", "")
 }
 
 func TestLoadDefaults(t *testing.T) {
@@ -71,6 +72,7 @@ func TestLoadOverrides(t *testing.T) {
 			RequestTimeout:  5 * time.Second,
 		},
 		MockBank:              BankConfig{BaseURL: DefaultMockBankURL},
+		DemoUserID:            DefaultDemoUserID,
 		HTTPAddr:              "[::1]:9090",
 		HTTPReadHeaderTimeout: 2 * time.Second,
 		HTTPReadTimeout:       20 * time.Second,
