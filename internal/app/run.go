@@ -7,7 +7,6 @@ import (
 	"github.com/2inxs/openbanking-service/internal/config"
 	"github.com/2inxs/openbanking-service/internal/infrastructure/cache"
 	"github.com/2inxs/openbanking-service/internal/infrastructure/cbr"
-	"github.com/2inxs/openbanking-service/internal/infrastructure/memory"
 	"github.com/2inxs/openbanking-service/internal/infrastructure/postgres"
 	"github.com/2inxs/openbanking-service/internal/usecase/currency"
 )
@@ -25,7 +24,7 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 
 	rateCache := cache.NewRateCache()
 	cbrClient := cbr.NewClient()
-	rateRepo := memory.NewRateRepository()
+	rateRepo := postgres.NewRateRepository(pool)
 
 	currencySvc := currency.NewService(cbrClient, rateRepo).WithCache(rateCache)
 	refresher := currency.NewRefresher(currencySvc, currency.RefresherConfig{
