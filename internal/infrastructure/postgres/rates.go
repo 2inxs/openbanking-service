@@ -23,10 +23,6 @@ func NewRateRepository(db DBTX) *RateRepository {
 	return &RateRepository{db: db}
 }
 
-type txBeginner interface {
-	Begin(ctx context.Context) (pgx.Tx, error)
-}
-
 func normalizeRateDay(t time.Time) time.Time {
 	u := t.UTC()
 	return time.Date(u.Year(), u.Month(), u.Day(), 0, 0, 0, 0, time.UTC)
