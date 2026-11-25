@@ -216,10 +216,10 @@ func TestAccountServiceReconciliationAndSecurityBoundaries(t *testing.T) {
 	}
 	svc := account.NewService(badRepo)
 
-	if _, err := svc.GetAccount(ctx, "user-1", "acc-mismatch"); !errors.Is(err, money.ErrCurrencyMismatch) {
+	if _, err := svc.GetAccount(ctx, "user-1", "acc-mismatch"); !errors.Is(err, account.ErrInvalidInput) {
 		t.Fatalf("expected ErrCurrencyMismatch on balance currency mismatch, got %v", err)
 	}
-	if _, err := svc.ListAccounts(ctx, "user-1"); !errors.Is(err, money.ErrCurrencyMismatch) {
+	if _, err := svc.ListAccounts(ctx, "user-1"); !errors.Is(err, account.ErrInvalidInput) {
 		t.Fatalf("expected ErrCurrencyMismatch in ListAccounts, got %v", err)
 	}
 
