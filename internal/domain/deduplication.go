@@ -11,24 +11,15 @@ import (
 	"github.com/2inxs/openbanking-service/internal/domain/money"
 )
 
-// ErrInsufficientDeduplicationData возвращается, когда у операции недостаточно
-// надёжных идентификаторов для безопасного сопоставления без риска ложного слияния.
 var ErrInsufficientDeduplicationData = errors.New("transaction: insufficient data for reliable deduplication")
 
-// DeduplicationStrategy описывает правило, по которому был сформирован deduplication_key.
 type DeduplicationStrategy string
 
 const (
-	// DedupStrategyExternalID — детерминированный ключ по стабильному внешнему ID банка (приоритет 1).
-	// Совпадает для одного и того же платежа, пришедшего из Open Banking API и из выписки.
-	DedupStrategyExternalID DeduplicationStrategy = "external_id"
-
-	// DedupStrategyStatementLine — позиционный ключ строки выписки при отсутствии external_id (приоритет 2).
-	// Сохраняет два реальных одинаковых платежа внутри выписки, не удаляя их молча.
+	DedupStrategyExternalID    DeduplicationStrategy = "external_id"
 	DedupStrategyStatementLine DeduplicationStrategy = "statement_line"
 )
 
-// DeduplicationInput содержит нормализованные атрибуты операции для вычисления deduplication_key.
 type DeduplicationInput struct {
 	AccountID         AccountID
 	Source            TransactionSourceID
@@ -41,17 +32,15 @@ type DeduplicationInput struct {
 	RowNumber         int
 }
 
-// ComputeTransactionDeduplicationKey вычисляет канонический 64-символьный hex SHA-256 ключ
-// для уникального индекса (account_id, deduplication_key) в таблице transactions.
 func ComputeTransactionDeduplicationKey(in DeduplicationInput) (string, DeduplicationStrategy, error) {
 	accID := strings.TrimSpace(string(in.AccountID))
 	if accID == "" || accID != string(in.AccountID) {
 		return "", "", fmt.Errorf("%w: account_id is required", ErrInvalidModel)
 	}
-	if err := in.Amount.Validate(); err != nil {
-		return "", "", fmt.Errorf("%w: %v", ErrInvalidModel, err)
+	if !in.Source.Valid() {
+		return "", "", fmt.Errorf("%w: transaction source is unknown", ErrInvalidModel)
 	}
-	if err := in.Currency.Validate(); err != nil {
+	if err := (money.Money{Amount: in.Amount, Currency: in.Currency}).Validate(); err != nil {
 		return "", "", fmt.Errorf("%w: %v", ErrInvalidModel, err)
 	}
 
@@ -61,9 +50,6 @@ func ComputeTransactionDeduplicationKey(in DeduplicationInput) (string, Deduplic
 		return hex.EncodeToString(sum[:]), DedupStrategyExternalID, nil
 	}
 
-	// При отсутствии external_id одинаковые сумма и дата сами по себе не считаются дубликатом:
-	// для выписки используется позиционный ключ строки импорта, чтобы сохранить два реальных
-	// одинаковых платежа (например, две покупки на одну сумму в один день).
 	if in.Source == SourceStatement {
 		impID := strings.TrimSpace(string(in.StatementImportID))
 		if impID == "" || impID != string(in.StatementImportID) || in.RowNumber <= 0 {
