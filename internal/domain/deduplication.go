@@ -71,7 +71,7 @@ func ComputeTransactionDeduplicationKey(in DeduplicationInput) (string, Deduplic
 		return hex.EncodeToString(sum[:]), DedupStrategyStatementLine, nil
 	}
 
-	return "", "", fmt.Errorf("%w: external_id is required for source %q", ErrInsufficientDeduplicationData, in.Source)
+	return "", "", fmt.Errorf("%w: external_id is required for source %d", ErrInsufficientDeduplicationData, in.Source)
 }
 
 func effectiveTransactionTime(bookedAt, valueAt *time.Time) (time.Time, bool) {
