@@ -10,7 +10,6 @@ import (
 	"github.com/2inxs/openbanking-service/internal/domain"
 	"github.com/2inxs/openbanking-service/internal/domain/money"
 	"github.com/2inxs/openbanking-service/internal/usecase/currency"
-	"github.com/jackc/pgx/v5"
 )
 
 type RateRepository struct {
@@ -21,10 +20,6 @@ var _ currency.RateRepository = (*RateRepository)(nil)
 
 func NewRateRepository(db DBTX) *RateRepository {
 	return &RateRepository{db: db}
-}
-
-type txBeginner interface {
-	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
 func normalizeRateDay(t time.Time) time.Time {
