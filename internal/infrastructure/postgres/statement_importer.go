@@ -318,7 +318,7 @@ func computeStatementDedupKey(accountID domain.AccountID, importID string, row u
 	booked := row.BookedAt
 	key, _, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
 		AccountID:         accountID,
-		Source:            domain.TransactionSourceStatement,
+		Source:            domain.SourceStatement,
 		ExternalID:        row.ExternalID,
 		Amount:            row.Value.Amount,
 		Currency:          row.Value.Currency,
