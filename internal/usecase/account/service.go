@@ -86,7 +86,7 @@ func validateAndMapAccount(a domain.Account) (AccountSummary, error) {
 		Currency:          a.Currency,
 	}
 	if a.Balance != nil {
-		if err := a.Balance.Validate(); err != nil {
+		if err := a.Balance.Value.Validate(); err != nil {
 			return AccountSummary{}, fmt.Errorf("%w: %v", domain.ErrInvalidModel, err)
 		}
 		if a.Balance.Value.Currency != a.Currency {
