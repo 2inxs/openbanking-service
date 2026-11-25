@@ -100,7 +100,7 @@ func TestConnectBank(t *testing.T) {
 	client := &bankClientStub{}
 	mux := newConnectionMux(&connectionsStub{}, client)
 
-	first := serve(mux, http.MethodPost, "/api/v1/bank-connections", `{"bank_id":"mockbank"}`)
+	first := serve(mux, http.MethodPost, "/api/v1/bank-connections", `{"bank_code":"mockbank"}`)
 	if first.Code != http.StatusCreated {
 		t.Fatalf("first POST: status %d, body %s", first.Code, first.Body)
 	}
@@ -108,11 +108,11 @@ func TestConnectBank(t *testing.T) {
 	if err := json.Unmarshal(first.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.ID != "conn-1" || got.BankID != "mockbank" || got.Status != "active" || got.LastSyncedAt != nil {
+	if got.ID != "conn-1" || got.BankCode != "mockbank" || got.Status != "active" || got.LastSyncedAt != nil {
 		t.Fatalf("first POST: got %+v", got)
 	}
 
-	second := serve(mux, http.MethodPost, "/api/v1/bank-connections", `{"bank_id":"mockbank"}`)
+	second := serve(mux, http.MethodPost, "/api/v1/bank-connections", `{"bank_code":"mockbank"}`)
 	if second.Code != http.StatusOK || client.calls != 1 {
 		t.Fatalf("second POST: status %d, bank calls %d, want 200 and 1", second.Code, client.calls)
 	}
@@ -125,10 +125,10 @@ func TestConnectBankErrors(t *testing.T) {
 		bankErr error
 		want    int
 	}{
-		{"client sends user_id", `{"bank_id":"mockbank","user_id":"other"}`, nil, http.StatusBadRequest},
-		{"empty bank_id", `{"bank_id":"  "}`, nil, http.StatusBadRequest},
-		{"unknown bank", `{"bank_id":"nobank"}`, nil, http.StatusBadRequest},
-		{"bank rejected token", `{"bank_id":"mockbank"}`,
+		{"client sends user_id", `{"bank_code":"mockbank","user_id":"other"}`, nil, http.StatusBadRequest},
+		{"empty bank_code", `{"bank_code":"  "}`, nil, http.StatusBadRequest},
+		{"unknown bank", `{"bank_code":"nobank"}`, nil, http.StatusBadRequest},
+		{"bank rejected token", `{"bank_code":"mockbank"}`,
 			fmt.Errorf("openbanking: token dev_token_123: %w", banksync.ErrBankUnauthorized), http.StatusBadGateway},
 	}
 	for _, tt := range tests {
@@ -163,7 +163,7 @@ func TestGetConnection(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.BankID != "mockbank" || got.Status != "error" || got.LastSyncedAt == nil || !got.LastSyncedAt.Equal(synced) {
+	if got.BankCode != "mockbank" || got.Status != "error" || got.LastSyncedAt == nil || !got.LastSyncedAt.Equal(synced) {
 		t.Fatalf("own: got %+v", got)
 	}
 

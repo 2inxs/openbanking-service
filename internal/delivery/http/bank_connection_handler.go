@@ -18,12 +18,12 @@ var connectionStatusNames = map[domain.ConnectionStatusID]string{
 }
 
 type connectBankRequest struct {
-	BankID string `json:"bank_id"`
+	BankCode string `json:"bank_code"`
 }
 
 type BankConnectionResponse struct {
 	ID           string     `json:"id"`
-	BankID       string     `json:"bank_id"`
+	BankCode     string     `json:"bank_code"`
 	Status       string     `json:"status"`
 	LastSyncedAt *time.Time `json:"last_synced_at"`
 }
@@ -51,12 +51,12 @@ func (h *BankConnectionHandler) Connect(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "validation.invalid_body", "Некорректное тело запроса")
 		return
 	}
-	bankID := strings.TrimSpace(req.BankID)
-	if bankID == "" {
-		writeError(w, http.StatusBadRequest, "validation.bank_id_required", "Не указан bank_id")
+	bankCode := strings.TrimSpace(req.BankCode)
+	if bankCode == "" {
+		writeError(w, http.StatusBadRequest, "validation.bank_code_required", "Не указан bank_code")
 		return
 	}
-	view, created, err := h.uc.ConnectBank(r.Context(), h.currentUser(r), domain.BankCode(bankID))
+	conn, created, err := h.uc.ConnectBank(r.Context(), h.currentUser(r), domain.BankCode(bankCode))
 	if err != nil {
 		writeUsecaseError(w, r, err)
 		return
@@ -65,23 +65,23 @@ func (h *BankConnectionHandler) Connect(w http.ResponseWriter, r *http.Request) 
 	if created {
 		status = http.StatusCreated
 	}
-	writeJSON(w, status, toResponse(view))
+	writeJSON(w, status, toResponse(conn))
 }
 
 func (h *BankConnectionHandler) GetConnection(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("connectionId")
-	view, err := h.uc.GetUserConnection(r.Context(), h.currentUser(r), domain.BankConnectionID(id))
+	conn, err := h.uc.GetUserConnection(r.Context(), h.currentUser(r), domain.BankConnectionID(id))
 	if err != nil {
 		writeUsecaseError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toResponse(view))
+	writeJSON(w, http.StatusOK, toResponse(conn))
 }
 
 func toResponse(c domain.BankConnection) BankConnectionResponse {
 	return BankConnectionResponse{
 		ID:           string(c.ID),
-		BankID:       string(c.BankCode),
+		BankCode:     string(c.BankCode),
 		Status:       connectionStatusNames[c.Status],
 		LastSyncedAt: c.LastSyncedAt,
 	}
