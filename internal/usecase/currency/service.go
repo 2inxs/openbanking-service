@@ -27,6 +27,10 @@ type RateRepository interface {
 	GetRate(ctx context.Context, curr money.Currency, date *time.Time) (domain.ExchangeRate, error)
 }
 
+type supportedCurrencyLister interface {
+	SupportedCurrencies(ctx context.Context) (map[money.Currency]struct{}, error)
+}
+
 type RateCache interface {
 	Replace(daily domain.DailyRates, fetchedAt time.Time)
 	Get(curr money.Currency) (domain.ExchangeRate, bool)
@@ -54,64 +58,122 @@ func (s *Service) WithCache(c RateCache) *Service {
 	return s
 }
 
-// Warmup загружает последний сохранённый курс из БД при старте
+func (s *Service) filterSupported(ctx context.Context, daily domain.DailyRates) (domain.DailyRates, error) {
+	lister, ok := s.repo.(supportedCurrencyLister)
+	if !ok {
+		return daily, nil
+	}
+	supported, err := lister.SupportedCurrencies(ctx)
+	if err != nil {
+		return domain.DailyRates{}, err
+	}
+	filtered := make(map[money.Currency]domain.ExchangeRate, len(daily.Rates))
+	for code, rate := range daily.Rates {
+		if _, exists := supported[code]; exists {
+			filtered[code] = rate
+		}
+	}
+	return domain.DailyRates{
+		Date:  daily.Date,
+		Rates: filtered,
+	}, nil
+}
+
+// Warmup загружает последние сохранённые курсы из БД при старте
 // и возвращает true, если курсы отсутствуют или устарели (нужно обновление).
 func (s *Service) Warmup(ctx context.Context) (bool, error) {
 	now := s.nowFn()
-	rate, err := s.repo.GetRate(ctx, money.Currency("USD"), nil)
-	if err != nil {
-		if errors.Is(err, ErrRateNotFound) {
-			return true, nil
+
+	candidates := []money.Currency{money.Currency("USD"), money.Currency("EUR"), money.Currency("JPY")}
+	if lister, ok := s.repo.(supportedCurrencyLister); ok {
+		supported, err := lister.SupportedCurrencies(ctx)
+		if err != nil {
+			return true, fmt.Errorf("currency: warmup load supported currencies: %w", err)
 		}
-		return true, fmt.Errorf("currency: warmup read latest rate: %w", err)
+		candidates = candidates[:0]
+		for code := range supported {
+			if code != money.RUB {
+				candidates = append(candidates, code)
+			}
+		}
 	}
+
+	loaded := make(map[money.Currency]domain.ExchangeRate, len(candidates))
+	var latestDate time.Time
+
+	for _, code := range candidates {
+		rate, err := s.repo.GetRate(ctx, code, nil)
+		if err != nil {
+			if errors.Is(err, ErrRateNotFound) {
+				continue
+			}
+			return true, fmt.Errorf("currency: warmup read latest rate for %s: %w", code, err)
+		}
+		loaded[code] = rate
+		if rate.RateDate.After(latestDate) {
+			latestDate = rate.RateDate
+		}
+	}
+
+	if len(loaded) == 0 {
+		return true, nil
+	}
+
 	if s.cache != nil {
 		s.cache.Replace(domain.DailyRates{
-			Date:  rate.RateDate,
-			Rates: map[money.Currency]domain.ExchangeRate{rate.Currency: rate},
+			Date:  latestDate,
+			Rates: loaded,
 		}, now.UTC())
 	}
-	return isStale(rate.RateDate, now), nil
+	return isStale(latestDate, now), nil
 }
 
 func (s *Service) Refresh(ctx context.Context) error {
-	s.syncMu.Lock()
-	defer s.syncMu.Unlock()
-
 	daily, err := s.provider.FetchLatest(ctx)
 	if err != nil {
 		return fmt.Errorf("currency: fetch latest rates: %w", err)
 	}
-	if err := s.repo.SaveBatch(ctx, daily); err != nil {
-		return fmt.Errorf("currency: save rates batch: %w", err)
-	}
-	// Кеш обновляем строго после успешного сохранения в БД.
-	if s.cache != nil {
-		s.cache.Replace(daily, s.nowFn().UTC())
-	}
-	return nil
-}
 
-func (s *Service) SyncByDate(ctx context.Context, date time.Time) error {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
 
-	daily, err := s.provider.FetchByDate(ctx, date)
+	filtered, err := s.filterSupported(ctx, daily)
 	if err != nil {
-		return fmt.Errorf("currency: fetch rates by date: %w", err)
+		return fmt.Errorf("currency: filter supported rates: %w", err)
 	}
-	if err := s.repo.SaveBatch(ctx, daily); err != nil {
+	if err := s.repo.SaveBatch(ctx, filtered); err != nil {
 		return fmt.Errorf("currency: save rates batch: %w", err)
 	}
 	if s.cache != nil {
 		currentDate, _, ok := s.cache.Meta()
-		if !ok || !daily.Date.Before(currentDate) {
-			s.cache.Replace(daily, s.nowFn().UTC())
+		if !ok || !filtered.Date.Before(currentDate) {
+			s.cache.Replace(filtered, s.nowFn().UTC())
 		}
 	}
 	return nil
 }
-
+func (s *Service) SyncByDate(ctx context.Context, date time.Time) error {
+	daily, err := s.provider.FetchByDate(ctx, date)
+	if err != nil {
+		return fmt.Errorf("currency: fetch rates by date: %w", err)
+	}
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	filtered, err := s.filterSupported(ctx, daily)
+	if err != nil {
+		return fmt.Errorf("currency: filter supported rates: %w", err)
+	}
+	if err := s.repo.SaveBatch(ctx, filtered); err != nil {
+		return fmt.Errorf("currency: save rates batch: %w", err)
+	}
+	if s.cache != nil {
+		currentDate, _, ok := s.cache.Meta()
+		if !ok || !filtered.Date.Before(currentDate) {
+			s.cache.Replace(filtered, s.nowFn().UTC())
+		}
+	}
+	return nil
+}
 func (s *Service) GetRate(ctx context.Context, curr money.Currency, date *time.Time) (domain.ExchangeRate, error) {
 	if err := curr.Validate(); err != nil {
 		return domain.ExchangeRate{}, fmt.Errorf("%w: %v", ErrInvalidCurrency, err)
