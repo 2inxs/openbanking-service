@@ -315,10 +315,19 @@ func (r *StatementImportRepository) ImportStream(
 	}, nil
 }
 func computeStatementDedupKey(accountID domain.AccountID, importID string, row usecasestmt.TransactionRow) string {
-	ext := strings.TrimSpace(row.ExternalID)
-	if ext != "" {
-		sum := sha256.Sum256([]byte(fmt.Sprintf("v1|%s|ext|%s", accountID, ext)))
-		return hex.EncodeToString(sum[:])
+	booked := row.BookedAt
+	key, _, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
+		AccountID:         accountID,
+		Source:            domain.TransactionSourceStatement,
+		ExternalID:        row.ExternalID,
+		Amount:            row.Value.Amount,
+		Currency:          row.Value.Currency,
+		BookedAt:          &booked,
+		StatementImportID: domain.StatementImportID(importID),
+		RowNumber:         row.RowNumber,
+	})
+	if err == nil {
+		return key
 	}
 	sum := sha256.Sum256([]byte(fmt.Sprintf("v1|%s|import|%s|line|%d|%s|%s|%s",
 		accountID,
