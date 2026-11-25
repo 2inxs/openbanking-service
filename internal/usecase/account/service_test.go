@@ -10,6 +10,7 @@ import (
 	"github.com/2inxs/openbanking-service/internal/domain"
 	"github.com/2inxs/openbanking-service/internal/domain/money"
 	"github.com/2inxs/openbanking-service/internal/usecase/account"
+	"github.com/2inxs/openbanking-service/pkg/logger"
 )
 
 type stubAccountRepo struct {
