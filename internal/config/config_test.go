@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,8 @@ func clearSettings(t *testing.T) {
 		t.Setenv(name, "")
 	}
 	t.Setenv("DATABASE_URL", "postgres://postgres@localhost:5432/openBanking?sslmode=disable")
+	t.Setenv("MOCKBANK_BASE_URL", "")
+	t.Setenv("MOCKBANK_DEMO_TOKEN", "")
 }
 
 func TestLoadDefaults(t *testing.T) {
@@ -67,6 +70,7 @@ func TestLoadOverrides(t *testing.T) {
 			RetryInterval:   time.Minute,
 			RequestTimeout:  5 * time.Second,
 		},
+		MockBank:              BankConfig{BaseURL: DefaultMockBankURL},
 		HTTPAddr:              "[::1]:9090",
 		HTTPReadHeaderTimeout: 2 * time.Second,
 		HTTPReadTimeout:       20 * time.Second,
@@ -160,5 +164,29 @@ func TestStatementTimeoutFitsPostgreSQL(t *testing.T) {
 	t.Setenv("DB_STATEMENT_TIMEOUT", "1000h")
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "DB_STATEMENT_TIMEOUT") {
 		t.Fatalf("expected PostgreSQL timeout limit error, got %v", err)
+	}
+}
+
+func TestLoadMockBank(t *testing.T) {
+	clearSettings(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MockBank.BaseURL != DefaultMockBankURL || cfg.MockBank.Token != "" {
+		t.Fatalf("defaults: base URL %q, token set: %v", cfg.MockBank.BaseURL, cfg.MockBank.Token != "")
+	}
+
+	t.Setenv("MOCKBANK_BASE_URL", " http://mock:9000/api ")
+	t.Setenv("MOCKBANK_DEMO_TOKEN", " secret-token ")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MockBank.BaseURL != "http://mock:9000/api" || string(cfg.MockBank.Token) != "secret-token" {
+		t.Fatalf("overrides not applied: base URL %q", cfg.MockBank.BaseURL)
+	}
+	if printed := fmt.Sprintf("%v %+v %#v", cfg, cfg, cfg); strings.Contains(printed, "secret-token") {
+		t.Fatal("token is printed by fmt")
 	}
 }

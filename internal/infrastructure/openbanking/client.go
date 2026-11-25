@@ -40,6 +40,8 @@ func WithHTTPClient(hc *http.Client) Option {
 	}
 }
 
+var _ banksync.BankClient = (*Client)(nil)
+
 type Option func(*Client)
 
 func NewClient(baseURL, token string, opts ...Option) (*Client, error) {

@@ -3,12 +3,26 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 )
+
+type Secret string
+
+func (Secret) String() string       { return "[REDACTED]" }                   // для fmt: %v, %s, %+v
+func (Secret) GoString() string     { return "[REDACTED]" }                   // для %#v
+func (Secret) LogValue() slog.Value { return slog.StringValue("[REDACTED]") } // для slog
+
+const DefaultMockBankURL = "http://127.0.0.1:8081/open-banking/v1/mockbank"
+
+type BankConfig struct {
+	BaseURL string
+	Token   Secret
+}
 
 // Config contains the settings needed to start and stop the API.
 type RatesConfig struct {
@@ -20,6 +34,7 @@ type RatesConfig struct {
 type Config struct {
 	Database              DatabaseConfig
 	Rates                 RatesConfig
+	MockBank              BankConfig
 	HTTPAddr              string
 	HTTPReadHeaderTimeout time.Duration
 	HTTPReadTimeout       time.Duration
@@ -51,6 +66,7 @@ func Load() (Config, error) {
 			RetryInterval:   5 * time.Minute,
 			RequestTimeout:  10 * time.Second,
 		},
+		MockBank:              BankConfig{BaseURL: DefaultMockBankURL},
 		HTTPAddr:              "127.0.0.1:8080",
 		HTTPReadHeaderTimeout: 5 * time.Second,
 		HTTPReadTimeout:       15 * time.Second,
@@ -70,6 +86,10 @@ func Load() (Config, error) {
 		}
 		cfg.Database.MaxConns = int32(n)
 	}
+	if value := strings.TrimSpace(os.Getenv("MOCKBANK_BASE_URL")); value != "" {
+		cfg.MockBank.BaseURL = value
+	}
+	cfg.MockBank.Token = Secret(strings.TrimSpace(os.Getenv("MOCKBANK_DEMO_TOKEN")))
 	if value := os.Getenv("HTTP_ADDR"); value != "" {
 		cfg.HTTPAddr = value
 	}
