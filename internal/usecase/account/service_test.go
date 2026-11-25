@@ -3,6 +3,7 @@ package account_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -186,5 +187,61 @@ func TestAccountServiceValidationAndErrors(t *testing.T) {
 	repo.err = dbErr
 	if _, err := svc.ListAccounts(ctx, "user-1"); !errors.Is(err, dbErr) {
 		t.Fatalf("expected propagated repo error, got %v", err)
+	}
+}
+
+func TestAccountServiceReconciliationAndSecurityBoundaries(t *testing.T) {
+	ctx := context.Background()
+	asOf := time.Date(2026, 11, 25, 14, 0, 0, 0, time.UTC)
+
+	// 1. Сверка валют: если репозиторий вернул счёт RUB с остатком в USD — возвращается ErrCurrencyMismatch.
+	badRepo := &stubAccountRepo{
+		accounts: map[domain.AccountID]domain.Account{
+			"acc-mismatch": {
+				ID:       "acc-mismatch",
+				UserID:   "user-1",
+				BankID:   "bank-1",
+				Number:   "40817810000000000001",
+				Name:     "Счёт с битой валютой остатка",
+				Type:     domain.AccountCurrent,
+				Status:   domain.AccountActive,
+				Currency: money.RUB,
+				Balance: &domain.BalanceSnapshot{
+					Value: money.Money{Amount: mustAmount(t, "100.00"), Currency: "USD"},
+					AsOf:  asOf,
+				},
+			},
+		},
+	}
+	svc := account.NewService(badRepo)
+
+	if _, err := svc.GetAccount(ctx, "user-1", "acc-mismatch"); !errors.Is(err, money.ErrCurrencyMismatch) {
+		t.Fatalf("expected ErrCurrencyMismatch on balance currency mismatch, got %v", err)
+	}
+	if _, err := svc.ListAccounts(ctx, "user-1"); !errors.Is(err, money.ErrCurrencyMismatch) {
+		t.Fatalf("expected ErrCurrencyMismatch in ListAccounts, got %v", err)
+	}
+
+	// 2. Безопасность: несовпадение userID с контекстом авторизованного пользователя отклоняется до обращения к БД.
+	badRepo.calls = 0
+	authCtx := logger.WithFields(ctx, func(f *logger.ContextFields) {
+		f.UserID = "authenticated-user"
+	})
+	if _, err := svc.GetAccount(authCtx, "user-1", "acc-mismatch"); !errors.Is(err, account.ErrAccountNotFound) {
+		t.Fatalf("expected ErrAccountNotFound when userID mismatches context user, got %v", err)
+	}
+	if _, err := svc.ListAccounts(authCtx, "user-1"); !errors.Is(err, account.ErrAccountNotFound) {
+		t.Fatalf("expected ErrAccountNotFound in ListAccounts when userID mismatches context user, got %v", err)
+	}
+	if badRepo.calls != 0 {
+		t.Fatalf("expected repo not to be called on context user mismatch, calls=%d", badRepo.calls)
+	}
+
+	// 3. Граничные проверки ID: управляющие символы и длина > 128 отклоняются с ErrInvalidInput.
+	if _, err := svc.GetAccount(ctx, "user\n1", "acc-1"); !errors.Is(err, account.ErrInvalidInput) {
+		t.Fatalf("expected ErrInvalidInput for newline in userID, got %v", err)
+	}
+	if _, err := svc.ListAccounts(ctx, domain.UserID(strings.Repeat("a", 129))); !errors.Is(err, account.ErrInvalidInput) {
+		t.Fatalf("expected ErrInvalidInput for oversized userID, got %v", err)
 	}
 }
