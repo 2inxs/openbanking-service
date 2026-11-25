@@ -160,6 +160,10 @@ func TestAccountServiceListAndGet(t *testing.T) {
 	if _, err := svc.GetAccount(ctx, user1, accForeignID); !errors.Is(err, account.ErrAccountNotFound) {
 		t.Fatalf("expected ErrAccountNotFound for foreign account, got %v", err)
 	}
+	leakedCheck, err := svc.ListAccounts(ctx, user1)
+	if err != nil || len(leakedCheck) != 2 {
+		t.Fatalf("ListAccounts must not leak foreign accounts: err=%v len=%d", err, len(leakedCheck))
+	}
 	repo.bypassOwnershipFilter = false
 }
 
