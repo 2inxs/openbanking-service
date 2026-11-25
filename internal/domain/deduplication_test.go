@@ -6,10 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/2inxs/openbanking-service/inte
-al/domain"
-	"github.com/2inxs/openbanking-service/inte
-al/domain/money"
+	"github.com/2inxs/openbanking-service/internal/domain"
+	"github.com/2inxs/openbanking-service/internal/domain/money"
 )
 
 func mustAmt(t *testing.T, v string) money.Amount {
@@ -18,8 +16,7 @@ func mustAmt(t *testing.T, v string) money.Amount {
 	if err != nil {
 		t.Fatal(err)
 	}
-	retu
- a
+	return a
 }
 
 func TestComputeTransactionDeduplicationKey(t *testing.T) {
@@ -33,40 +30,33 @@ func TestComputeTransactionDeduplicationKey(t *testing.T) {
 		wantErr      error
 	}{
 		{
-			name: "open_banking_with_exte
-al_id",
+			name: "open_banking_with_external_id",
 			in: domain.DeduplicationInput{
 				AccountID:  accID,
 				Source:     domain.SourceOpenBanking,
-				Exte
-alID: "tx-bank-001",
+				ExternalID: "tx-bank-001",
 				Amount:     mustAmt(t, "-450.00"),
 				Currency:   money.RUB,
 				BookedAt:   &booked,
 			},
-			wantStrategy: domain.DedupStrategyExte
-alID,
+			wantStrategy: domain.DedupStrategyExternalID,
 		},
 		{
-			name: "statement_with_exte
-al_id_trimmed",
+			name: "statement_with_external_id_trimmed",
 			in: domain.DeduplicationInput{
 				AccountID:         accID,
 				Source:            domain.SourceStatement,
-				Exte
-alID:        "  tx-bank-001  ",
+				ExternalID:        "  tx-bank-001  ",
 				Amount:            mustAmt(t, "-450.00"),
 				Currency:          money.RUB,
 				BookedAt:          &booked,
 				StatementImportID: "22222222-2222-2222-2222-222222222222",
 				RowNumber:         12,
 			},
-			wantStrategy: domain.DedupStrategyExte
-alID,
+			wantStrategy: domain.DedupStrategyExternalID,
 		},
 		{
-			name: "statement_without_exte
-al_id_uses_line_strategy",
+			name: "statement_without_external_id_uses_line_strategy",
 			in: domain.DeduplicationInput{
 				AccountID:         accID,
 				Source:            domain.SourceStatement,
@@ -79,8 +69,7 @@ al_id_uses_line_strategy",
 			wantStrategy: domain.DedupStrategyStatementLine,
 		},
 		{
-			name: "open_banking_without_exte
-al_id_rejected",
+			name: "open_banking_without_external_id_rejected",
 			in: domain.DeduplicationInput{
 				AccountID: accID,
 				Source:    domain.SourceOpenBanking,
@@ -91,8 +80,7 @@ al_id_rejected",
 			wantErr: domain.ErrInsufficientDeduplicationData,
 		},
 		{
-			name: "statement_without_exte
-al_id_and_missing_row_rejected",
+			name: "statement_without_external_id_and_missing_row_rejected",
 			in: domain.DeduplicationInput{
 				AccountID: accID,
 				Source:    domain.SourceStatement,
@@ -112,8 +100,7 @@ al_id_and_missing_row_rejected",
 				if !errors.Is(err, tc.wantErr) {
 					t.Fatalf("expected error %v, got %v", tc.wantErr, err)
 				}
-				retu
-
+				return
 			}
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -128,19 +115,13 @@ al_id_and_missing_row_rejected",
 		})
 	}
 
-	if keys["open_banking_with_exte
-al_id"] != keys["statement_with_exte
-al_id_trimmed"] {
-		t.Fatalf("API and statement keys for same exte
-al_id must match: api=%s stmt=%s",
-			keys["open_banking_with_exte
-al_id"], keys["statement_with_exte
-al_id_trimmed"])
+	if keys["open_banking_with_external_id"] != keys["statement_with_external_id_trimmed"] {
+		t.Fatalf("API and statement keys for same external_id must match: api=%s stmt=%s",
+			keys["open_banking_with_external_id"], keys["statement_with_external_id_trimmed"])
 	}
 }
 
-func TestIdenticalRealPaymentsWithoutExte
-alIDAreNotCollapsed(t *testing.T) {
+func TestIdenticalRealPaymentsWithoutExternalIDAreNotCollapsed(t *testing.T) {
 	accID := domain.AccountID("11111111-1111-1111-1111-111111111111")
 	impID := domain.StatementImportID("22222222-2222-2222-2222-222222222222")
 	booked := time.Date(2026, 11, 21, 9, 15, 0, 0, time.UTC)
@@ -173,111 +154,98 @@ alIDAreNotCollapsed(t *testing.T) {
 	}
 
 	if k1 == k2 {
-		t.Fatalf("two real identical payments without exte
-al_id must have distinct keys, got identical %s", k1)
+		t.Fatalf("two real identical payments without external_id must have distinct keys, got identical %s", k1)
 	}
 }
 
 func TestDeduplicationSecurityAndBoundaryCases(t *testing.T) {
-accID := domain.AccountID("11111111-1111-1111-1111-111111111111")
-booked := time.Date(2026, 11, 22, 11, 0, 0, 0, time.UTC)
-amt := mustAmt(t, "-100.00")
+	accID := domain.AccountID("11111111-1111-1111-1111-111111111111")
+	booked := time.Date(2026, 11, 22, 11, 0, 0, 0, time.UTC)
+	amt := mustAmt(t, "-100.00")
 
-// 1. Максимально допустимая длина exte
-al_id = 255 проходит; 256 отклоняется с ErrInvalidModel.
-maxExt := strings.Repeat("x", 255)
-if _, _, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
-AccountID:  accID,
-Source:     domain.SourceOpenBanking,
-Exte
-alID: maxExt,
-Amount:     amt,
-Currency:   money.RUB,
-BookedAt:   &booked,
-}); err != nil {
-t.Fatalf("expected 255-char exte
-al_id to pass, got %v", err)
-}
+	// 1. Максимально допустимая длина external_id = 255 проходит; 256 отклоняется с ErrInvalidModel.
+	maxExt := strings.Repeat("x", 255)
+	if _, _, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
+		AccountID:  accID,
+		Source:     domain.SourceOpenBanking,
+		ExternalID: maxExt,
+		Amount:     amt,
+		Currency:   money.RUB,
+		BookedAt:   &booked,
+	}); err != nil {
+		t.Fatalf("expected 255-char external_id to pass, got %v", err)
+	}
 
-if _, _, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
-AccountID:  accID,
-Source:     domain.SourceOpenBanking,
-Exte
-alID: strings.Repeat("x", 256),
-Amount:     amt,
-Currency:   money.RUB,
-BookedAt:   &booked,
-}); !errors.Is(err, domain.ErrInvalidModel) {
-t.Fatalf("expected ErrInvalidModel for 256-char exte
-al_id, got %v", err)
-}
+	if _, _, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
+		AccountID:  accID,
+		Source:     domain.SourceOpenBanking,
+		ExternalID: strings.Repeat("x", 256),
+		Amount:     amt,
+		Currency:   money.RUB,
+		BookedAt:   &booked,
+	}); !errors.Is(err, domain.ErrInvalidModel) {
+		t.Fatalf("expected ErrInvalidModel for 256-char external_id, got %v", err)
+	}
 
-// 2. Управляющие символы (\n, \x00) отклоняются (защита от log/delimiter injection).
-if _, _, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
-AccountID:  accID,
-Source:     domain.SourceOpenBanking,
-Exte
-alID: "tx-1\ninjected",
-Amount:     amt,
-Currency:   money.RUB,
-BookedAt:   &booked,
-}); !errors.Is(err, domain.ErrInvalidModel) {
-t.Fatalf("expected ErrInvalidModel for control chars in exte
-al_id, got %v", err)
-}
+	// 2. Управляющие символы (\n, \x00) отклоняются (защита от log/delimiter injection).
+	if _, _, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
+		AccountID:  accID,
+		Source:     domain.SourceOpenBanking,
+		ExternalID: "tx-1\ninjected",
+		Amount:     amt,
+		Currency:   money.RUB,
+		BookedAt:   &booked,
+	}); !errors.Is(err, domain.ErrInvalidModel) {
+		t.Fatalf("expected ErrInvalidModel for control chars in external_id, got %v", err)
+	}
 
-// 3. Отсутствие обеих дат (BookedAt == nil && ValueAt == nil) отклоняется с ErrInvalidModel.
-if _, _, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
-AccountID:  accID,
-Source:     domain.SourceOpenBanking,
-Exte
-alID: "tx-no-date",
-Amount:     amt,
-Currency:   money.RUB,
-}); !errors.Is(err, domain.ErrInvalidModel) {
-t.Fatalf("expected ErrInvalidModel when both BookedAt and ValueAt are nil, got %v", err)
-}
+	// 3. Отсутствие обеих дат (BookedAt == nil && ValueAt == nil) отклоняется с ErrInvalidModel.
+	if _, _, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
+		AccountID:  accID,
+		Source:     domain.SourceOpenBanking,
+		ExternalID: "tx-no-date",
+		Amount:     amt,
+		Currency:   money.RUB,
+	}); !errors.Is(err, domain.ErrInvalidModel) {
+		t.Fatalf("expected ErrInvalidModel when both BookedAt and ValueAt are nil, got %v", err)
+	}
 
-// 4. Pending-операция из API без BookedAt, но с ValueAt проходит корректно.
-if _, strategy, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
-AccountID:  accID,
-Source:     domain.SourceOpenBanking,
-Exte
-alID: "tx-pending-value-at",
-Amount:     amt,
-Currency:   money.RUB,
-ValueAt:    &booked,
-}); err != nil || strategy != domain.DedupStrategyExte
-alID {
-t.Fatalf("expected Pending tx with ValueAt to succeed, err=%v strategy=%q", err, strategy)
-}
+	// 4. Pending-операция из API без BookedAt, но с ValueAt проходит корректно.
+	if _, strategy, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
+		AccountID:  accID,
+		Source:     domain.SourceOpenBanking,
+		ExternalID: "tx-pending-value-at",
+		Amount:     amt,
+		Currency:   money.RUB,
+		ValueAt:    &booked,
+	}); err != nil || strategy != domain.DedupStrategyExternalID {
+		t.Fatalf("expected Pending tx with ValueAt to succeed, err=%v strategy=%q", err, strategy)
+	}
 
-// 5. Отсутствие коллизий при символе '|' внутри идентификаторов.
-kA, _, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
-AccountID:  "acc|ext",
-Source:     domain.SourceOpenBanking,
-Exte
-alID: "123",
-Amount:     amt,
-Currency:   money.RUB,
-BookedAt:   &booked,
-})
-if err != nil {
-t.Fatal(err)
-}
-kB, _, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
-AccountID:  "acc",
-Source:     domain.SourceOpenBanking,
-Exte
-alID: "ext|123",
-Amount:     amt,
-Currency:   money.RUB,
-BookedAt:   &booked,
-})
-if err != nil {
-t.Fatal(err)
-}
-if kA == kB {
-t.Fatalf("delimiter collision detected: kA == kB == %s", kA)
-}
+	// 5. Отсутствие коллизий при символе '|' внутри идентификаторов.
+	kA, _, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
+		AccountID:  "acc|ext",
+		Source:     domain.SourceOpenBanking,
+		ExternalID: "123",
+		Amount:     amt,
+		Currency:   money.RUB,
+		BookedAt:   &booked,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kB, _, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
+		AccountID:  "acc",
+		Source:     domain.SourceOpenBanking,
+		ExternalID: "ext|123",
+		Amount:     amt,
+		Currency:   money.RUB,
+		BookedAt:   &booked,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kA == kB {
+		t.Fatalf("delimiter collision detected: kA == kB == %s", kA)
+	}
 }
