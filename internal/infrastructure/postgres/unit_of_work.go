@@ -2,21 +2,48 @@ package postgres
 
 import (
 	"context"
-	"github.com/2inxs/openbanking-service/internal/domain"
-	"github.com/2inxs/openbanking-service/internal/usecase/persistence"
 	"time"
+
+	"github.com/2inxs/openbanking-service/internal/domain"
+	"github.com/2inxs/openbanking-service/internal/usecase/banksync"
+	"github.com/2inxs/openbanking-service/internal/usecase/statement"
+	"github.com/jackc/pgx/v5"
 )
 
-type UnitOfWork struct{ db txBeginner }
+type BankSyncUnitOfWork struct{ db txBeginner }
+type StatementUnitOfWork struct{ db txBeginner }
 
-var _ persistence.TransactionRunner = (*UnitOfWork)(nil)
+var _ banksync.TransactionRunner = (*BankSyncUnitOfWork)(nil)
+var _ statement.TransactionRunner = (*StatementUnitOfWork)(nil)
 
-func NewUnitOfWork(db txBeginner) *UnitOfWork { return &UnitOfWork{db: db} }
-func (u *UnitOfWork) Within(ctx context.Context, fn func(persistence.Repositories) error) error {
+func NewBankSyncUnitOfWork(db txBeginner) *BankSyncUnitOfWork {
+	return &BankSyncUnitOfWork{db: db}
+}
+
+func NewStatementUnitOfWork(db txBeginner) *StatementUnitOfWork {
+	return &StatementUnitOfWork{db: db}
+}
+
+func (u *BankSyncUnitOfWork) Within(ctx context.Context, fn func(banksync.Repositories) error) error {
 	if fn == nil {
 		return domain.ErrInvalidModel
 	}
-	tx, err := u.db.Begin(ctx)
+	return withinTransaction(ctx, u.db, func(tx pgx.Tx) error {
+		return fn(banksync.Repositories{Accounts: NewAccountRepository(tx), Connections: NewConnectionRepository(tx), Transactions: NewTransactionRepository(tx)})
+	})
+}
+
+func (u *StatementUnitOfWork) Within(ctx context.Context, fn func(statement.Repositories) error) error {
+	if fn == nil {
+		return domain.ErrInvalidModel
+	}
+	return withinTransaction(ctx, u.db, func(tx pgx.Tx) error {
+		return fn(statement.Repositories{Transactions: NewTransactionRepository(tx), Imports: NewImportRecordRepository(tx)})
+	})
+}
+
+func withinTransaction(ctx context.Context, db txBeginner, fn func(pgx.Tx) error) error {
+	tx, err := db.Begin(ctx)
 	if err != nil {
 		return repositoryError(err, ErrUnavailable, domain.ErrInvalidModel)
 	}
@@ -25,8 +52,7 @@ func (u *UnitOfWork) Within(ctx context.Context, fn func(persistence.Repositorie
 		defer cancel()
 		_ = tx.Rollback(cleanup)
 	}()
-	repos := persistence.Repositories{Accounts: NewAccountRepository(tx), Connections: NewConnectionRepository(tx), Transactions: NewTransactionRepository(tx), Imports: NewImportRecordRepository(tx)}
-	if err := fn(repos); err != nil {
+	if err := fn(tx); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {

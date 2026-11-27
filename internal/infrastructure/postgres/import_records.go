@@ -7,7 +7,6 @@ import (
 	st "github.com/2inxs/openbanking-service/internal/usecase/statement"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"strings"
 )
 
 type ImportRecordRepository struct{ db DBTX }
@@ -32,41 +31,12 @@ func scanImport(row pgx.Row) (st.ImportRecord, error) {
 	err := row.Scan(&i.ID, &i.AccountID, &i.FileName, &i.FileSHA256, &i.Status, &i.ImportedCount, &i.SkippedCount, &i.ErrorCount, &i.ErrorMessage)
 	return i, importError(err)
 }
-func validImport(i st.ImportRecord) error {
-	if err := validIDs(string(i.ID), string(i.AccountID)); err != nil {
-		return err
-	}
-	if strings.TrimSpace(i.FileName) == "" || !hashPattern.MatchString(i.FileSHA256) || i.ImportedCount < 0 || i.SkippedCount < 0 || i.ErrorCount < 0 {
-		return domain.ErrInvalidModel
-	}
-	switch i.Status {
-	case st.ImportPending, st.ImportProcessing, st.ImportCompleted, st.ImportFailed:
-	default:
-		return domain.ErrInvalidModel
-	}
-	if i.Status == st.ImportCompleted && (i.ErrorCount != 0 || i.ErrorMessage != "") {
-		return domain.ErrInvalidModel
-	}
-	if i.Status == st.ImportFailed && i.ImportedCount != 0 {
-		return domain.ErrInvalidModel
-	}
-	if (i.Status == st.ImportPending || i.Status == st.ImportProcessing) && (i.ImportedCount != 0 || i.SkippedCount != 0 || i.ErrorCount != 0 || i.ErrorMessage != "") {
-		return domain.ErrInvalidModel
-	}
-	return nil
-}
 func (r *ImportRecordRepository) Create(ctx context.Context, user domain.UserID, i st.ImportRecord) (st.ImportRecord, error) {
-	if err := validIDs(string(user)); err != nil {
+	if err := validIDs(string(user), string(i.ID), string(i.AccountID)); err != nil {
 		return st.ImportRecord{}, err
 	}
-	if err := validImport(i); err != nil {
+	if err := i.ValidateForCreate(); err != nil {
 		return st.ImportRecord{}, err
-	}
-	if i.Status != st.ImportPending && i.Status != st.ImportFailed {
-		return st.ImportRecord{}, domain.ErrInvalidModel
-	}
-	if i.ImportedCount != 0 || i.SkippedCount != 0 {
-		return st.ImportRecord{}, domain.ErrInvalidModel
 	}
 	return scanImport(r.db.QueryRow(ctx, `INSERT INTO statement_imports AS i
  (id,account_id,file_name,file_sha256,status,error_count,error_message,completed_at)
@@ -81,14 +51,13 @@ func (r *ImportRecordRepository) Get(ctx context.Context, user domain.UserID, id
 	return scanImport(r.db.QueryRow(ctx, `SELECT `+importRecordColumns+` FROM statement_imports i JOIN accounts a ON a.id=i.account_id WHERE i.id=$1 AND a.user_id=$2`, string(id), string(user)))
 }
 func (r *ImportRecordRepository) Transition(ctx context.Context, user domain.UserID, i st.ImportRecord, expected st.ImportStatus) (st.ImportRecord, error) {
-	if err := validIDs(string(user)); err != nil {
+	if err := validIDs(string(user), string(i.ID), string(i.AccountID)); err != nil {
 		return st.ImportRecord{}, err
 	}
-	if err := validImport(i); err != nil {
+	if err := i.Validate(); err != nil {
 		return st.ImportRecord{}, err
 	}
-	allowed := (expected == st.ImportPending && (i.Status == st.ImportProcessing || i.Status == st.ImportFailed)) || (expected == st.ImportProcessing && (i.Status == st.ImportCompleted || i.Status == st.ImportFailed))
-	if !allowed {
+	if !st.CanTransition(expected, i.Status) {
 		return st.ImportRecord{}, domain.ErrInvalidModel
 	}
 	got, err := scanImport(r.db.QueryRow(ctx, `UPDATE statement_imports AS i SET status=$4,imported_count=$5,skipped_count=$6,error_count=$7,error_message=NULLIF($8,''),

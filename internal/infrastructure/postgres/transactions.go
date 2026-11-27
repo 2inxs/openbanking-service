@@ -152,6 +152,13 @@ func (r *TransactionRepository) List(ctx context.Context, user domain.UserID, f 
 		afterTime = &f.After.OccurredAt
 		afterID = string(f.After.ID)
 	}
+	var accessible bool
+	if err := r.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM accounts WHERE id=$1 AND user_id=$2)`, string(f.AccountID), string(user)).Scan(&accessible); err != nil {
+		return tr.Page{}, transactionError(err)
+	}
+	if !accessible {
+		return tr.Page{}, tr.ErrNotFound
+	}
 	rows, err := r.db.Query(ctx, `SELECT `+transactionColumns+` FROM transactions t JOIN accounts a ON a.id=t.account_id
  WHERE a.user_id=$1 AND t.account_id=$2 AND ($3::timestamptz IS NULL OR t.occurred_at >= $3) AND ($4::timestamptz IS NULL OR t.occurred_at < $4)
  AND ($5::timestamptz IS NULL OR (t.occurred_at,t.id)<($5,$6::uuid)) ORDER BY t.occurred_at DESC,t.id DESC LIMIT $7`, string(user), string(f.AccountID), f.From, f.To, afterTime, afterID, f.Limit+1)
