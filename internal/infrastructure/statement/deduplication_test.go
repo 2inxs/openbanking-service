@@ -100,7 +100,7 @@ func TestUnicodeExternalIDPassesStatementImportAndDeduplication(t *testing.T) {
 	accID := domain.AccountID("11111111-1111-1111-1111-111111111111")
 	unicodeID := "ОПЕР-" + strings.Repeat("Ю", 200) // 205 рун, 410 байт (< 255 символов)
 
-	csvContent := "account_number;booked_at;amount;currency;external_id;description;counterparty_name\n" +
+	csvContent := "account_number;booked_at;amount;currency;external_id;description;counterparty\n" +
 		"40817810099910004312;2026-11-25;-500.00;RUB;" + unicodeID + ";Оплата услуг;ООО Тест\n"
 
 	repo := &captureUnicodeImporter{
