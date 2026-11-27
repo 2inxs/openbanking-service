@@ -106,6 +106,10 @@ func TestDistributedRefreshExpiryFencingAndBackoff(t *testing.T) {
 	if err := second.Complete(ctx, current, coordinatedDaily(95), time.Hour); err != nil {
 		t.Fatal(err)
 	}
+	// A delayed cleanup after an ambiguous commit must not shorten a successful schedule.
+	if err := second.Fail(ctx, current, time.Microsecond); err != nil {
+		t.Fatal(err)
+	}
 	if err := first.Fail(ctx, old, time.Microsecond); err != nil {
 		t.Fatal(err)
 	}

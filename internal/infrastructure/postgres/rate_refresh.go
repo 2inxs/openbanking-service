@@ -79,6 +79,6 @@ func (c *RateRefreshCoordinator) Fail(ctx context.Context, lease currency.Refres
 		return domain.ErrInvalidModel
 	}
 	_, err := c.db.Exec(ctx, `UPDATE rate_refresh_leases SET lease_until=clock_timestamp(),next_attempt_at=clock_timestamp()+$4::bigint*interval '1 microsecond'
- WHERE job_key=$1 AND owner=$2::uuid AND version=$3`, lease.Key, lease.Owner, lease.Version, retry.Microseconds())
+	 WHERE job_key=$1 AND owner=$2::uuid AND version=$3 AND lease_until>clock_timestamp()`, lease.Key, lease.Owner, lease.Version, retry.Microseconds())
 	return repositoryError(err, ErrUnavailable, domain.ErrInvalidModel)
 }
