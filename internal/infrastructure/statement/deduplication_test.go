@@ -128,7 +128,12 @@ func TestUnicodeExternalIDPassesStatementImportAndDeduplication(t *testing.T) {
 		t.Fatalf("expected 1 row to reach persistence, got res=%+v rows=%d", res, len(repo.savedRows))
 	}
 
-	key, strategy, err := statement.RowDeduplicationKey(accID, res.ImportID, repo.savedRows)
+	var firstRow usecasestmt.TransactionRow
+	for _, r := range repo.savedRows {
+		firstRow = r
+		break
+	}
+	key, strategy, err := statement.RowDeduplicationKey(accID, res.ImportID, firstRow)
 	if err != nil {
 		t.Fatalf("expected Unicode external_id to pass deduplication, got %v", err)
 	}
