@@ -155,7 +155,31 @@ func (r *StatementImportRepository) ImportStream(
 		"deduplication_key",
 	}
 
+	// Prepare bounded input before opening a SQL transaction. The parser enforces
+	// MaxFileSize; this extra row cap also bounds retention for custom StreamParsers.
+	var prepared []usecasestmt.TransactionChunk
+	preparedCount := 0
 	for chunk := range chunks {
+		if len(chunk.Rows) > usecasestmt.MaxRows-preparedCount {
+			return usecasestmt.ImportResult{}, usecasestmt.ErrTooManyRows
+		}
+		preparedCount += len(chunk.Rows)
+		if len(chunk.Rows) > 0 {
+			prepared = append(prepared, chunk)
+		}
+	}
+	fileSHA256, rowErrs, streamErr := finalize()
+	if streamErr != nil {
+		return usecasestmt.ImportResult{AccountID: target.ID, RowErrors: rowErrs}, streamErr
+	}
+	if preparedCount == 0 {
+		return usecasestmt.ImportResult{}, usecasestmt.ErrEmptyStatement
+	}
+	if err := ctx.Err(); err != nil {
+		return usecasestmt.ImportResult{}, err
+	}
+
+	for _, chunk := range prepared {
 		if len(chunk.Rows) == 0 {
 			continue
 		}
@@ -214,13 +238,6 @@ func (r *StatementImportRepository) ImportStream(
 		)
 	}
 
-	fileSHA256, rowErrs, streamErr := finalize()
-	if streamErr != nil {
-		return usecasestmt.ImportResult{
-			AccountID: target.ID,
-			RowErrors: rowErrs,
-		}, streamErr
-	}
 	if totalReceived == 0 || !txReady {
 		return usecasestmt.ImportResult{}, usecasestmt.ErrEmptyStatement
 	}
