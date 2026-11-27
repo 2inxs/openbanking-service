@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/2inxs/openbanking-service/internal/domain/money"
 )
@@ -47,8 +48,8 @@ type DeduplicationInput struct {
 	RowNumber         int
 }
 
-func validateBoundedToken(val string, maxLen int, allowInternalSpaces bool) error {
-	if val == "" || len(val) > maxLen || val != strings.TrimSpace(val) {
+func validateBoundedToken(val string, maxRunes int, allowInternalSpaces bool) error {
+	if val == "" || !utf8.ValidString(val) || utf8.RuneCountInString(val) > maxRunes || val != strings.TrimSpace(val) {
 		return ErrInvalidModel
 	}
 	for i := 0; i < len(val); i++ {
@@ -84,7 +85,7 @@ func ComputeTransactionDeduplicationKey(in DeduplicationInput) (string, Deduplic
 		if err := validateBoundedToken(extID, maxDedupExternalIDLen, true); err != nil {
 			return "", "", fmt.Errorf("%w: invalid external_id", ErrInvalidModel)
 		}
-		// Кодирование с явной длиной полей исключает коллизии при наличии символа '|' внутри external_id.
+		// Кодирование с явной байтовой длиной полей исключает коллизии при наличии символа '|' внутри external_id.
 		payload := fmt.Sprintf("v1|acc:%d:%s|ext:%d:%s", len(accID), accID, len(extID), extID)
 		sum := sha256.Sum256([]byte(payload))
 		return hex.EncodeToString(sum[:]), DedupStrategyExternalID, nil

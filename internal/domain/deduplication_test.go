@@ -248,4 +248,39 @@ func TestDeduplicationSecurityAndBoundaryCases(t *testing.T) {
 	if kA == kB {
 		t.Fatalf("delimiter collision detected: kA == kB == %s", kA)
 	}
+
+	// 6. Кириллический external_id: 255 символов (510 байт) принимается, 256 символов и битый UTF-8 отклоняются.
+	cyr255 := strings.Repeat("Ж", 255)
+	if _, strategy, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
+		AccountID:  accID,
+		Source:     domain.SourceStatement,
+		ExternalID: cyr255,
+		Amount:     amt,
+		Currency:   money.RUB,
+		BookedAt:   &booked,
+	}); err != nil || strategy != domain.DedupStrategyExternalID {
+		t.Fatalf("expected 255-rune Cyrillic external_id to pass, err=%v strategy=%q", err, strategy)
+	}
+
+	if _, _, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
+		AccountID:  accID,
+		Source:     domain.SourceStatement,
+		ExternalID: strings.Repeat("Ж", 256),
+		Amount:     amt,
+		Currency:   money.RUB,
+		BookedAt:   &booked,
+	}); !errors.Is(err, domain.ErrInvalidModel) {
+		t.Fatalf("expected ErrInvalidModel for 256-rune Cyrillic external_id, got %v", err)
+	}
+
+	if _, _, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
+		AccountID:  accID,
+		Source:     domain.SourceStatement,
+		ExternalID: "tx-\xff-invalid-utf8",
+		Amount:     amt,
+		Currency:   money.RUB,
+		BookedAt:   &booked,
+	}); !errors.Is(err, domain.ErrInvalidModel) {
+		t.Fatalf("expected ErrInvalidModel for invalid UTF-8 external_id, got %v", err)
+	}
 }
