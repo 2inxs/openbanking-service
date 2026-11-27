@@ -38,11 +38,13 @@ type RateCache interface {
 }
 
 type Service struct {
-	provider RateProvider
-	repo     RateRepository
-	cache    RateCache
-	nowFn    func() time.Time
-	syncMu   sync.Mutex
+	provider                                      RateProvider
+	repo                                          RateRepository
+	cache                                         RateCache
+	nowFn                                         func() time.Time
+	syncMu                                        sync.Mutex
+	coordinator                                   RefreshCoordinator
+	refreshInterval, retryInterval, leaseDuration time.Duration
 }
 
 func NewService(provider RateProvider, repo RateRepository) *Service {
@@ -129,6 +131,9 @@ func (s *Service) Warmup(ctx context.Context) (bool, error) {
 }
 
 func (s *Service) Refresh(ctx context.Context) error {
+	if s.coordinator != nil {
+		return s.coordinatedRefresh(ctx, "cbr:latest", s.provider.FetchLatest)
+	}
 	daily, err := s.provider.FetchLatest(ctx)
 	if err != nil {
 		return fmt.Errorf("currency: fetch latest rates: %w", err)
@@ -153,6 +158,13 @@ func (s *Service) Refresh(ctx context.Context) error {
 	return nil
 }
 func (s *Service) SyncByDate(ctx context.Context, date time.Time) error {
+	if date.IsZero() {
+		return domain.ErrInvalidModel
+	}
+	if s.coordinator != nil {
+		key := "cbr:date:" + date.Format("2006-01-02")
+		return s.coordinatedRefresh(ctx, key, func(ctx context.Context) (domain.DailyRates, error) { return s.provider.FetchByDate(ctx, date) })
+	}
 	daily, err := s.provider.FetchByDate(ctx, date)
 	if err != nil {
 		return fmt.Errorf("currency: fetch rates by date: %w", err)
