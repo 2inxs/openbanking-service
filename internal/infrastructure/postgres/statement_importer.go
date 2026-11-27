@@ -2,8 +2,6 @@ package postgres
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -199,7 +197,10 @@ func (r *StatementImportRepository) ImportStream(
 
 		copyRows := make([][]any, 0, len(chunk.Rows))
 		for _, row := range chunk.Rows {
-			dedupKey := computeStatementDedupKey(target.ID, importID, row)
+			dedupKey, err := computeStatementDedupKey(target.ID, importID, row)
+			if err != nil {
+				return usecasestmt.ImportResult{}, err
+			}
 			var extID any
 			if strings.TrimSpace(row.ExternalID) != "" {
 				extID = strings.TrimSpace(row.ExternalID)
@@ -331,19 +332,20 @@ func (r *StatementImportRepository) ImportStream(
 		SkippedCount:  skippedCount,
 	}, nil
 }
-func computeStatementDedupKey(accountID domain.AccountID, importID string, row usecasestmt.TransactionRow) string {
-	ext := strings.TrimSpace(row.ExternalID)
-	if ext != "" {
-		sum := sha256.Sum256([]byte(fmt.Sprintf("v1|%s|ext|%s", accountID, ext)))
-		return hex.EncodeToString(sum[:])
+func computeStatementDedupKey(accountID domain.AccountID, importID string, row usecasestmt.TransactionRow) (string, error) {
+	booked := row.BookedAt
+	key, _, err := domain.ComputeTransactionDeduplicationKey(domain.DeduplicationInput{
+		AccountID:         accountID,
+		Source:            domain.SourceStatement,
+		ExternalID:        row.ExternalID,
+		Amount:            row.Value.Amount,
+		Currency:          row.Value.Currency,
+		BookedAt:          &booked,
+		StatementImportID: domain.StatementImportID(importID),
+		RowNumber:         row.RowNumber,
+	})
+	if err != nil {
+		return "", err
 	}
-	sum := sha256.Sum256([]byte(fmt.Sprintf("v1|%s|import|%s|line|%d|%s|%s|%s",
-		accountID,
-		importID,
-		row.RowNumber,
-		row.BookedAt.UTC().Format(time.RFC3339Nano),
-		row.Value.Amount.String(),
-		row.Value.Currency,
-	)))
-	return hex.EncodeToString(sum[:])
+	return key, nil
 }
