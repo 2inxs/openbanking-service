@@ -70,7 +70,7 @@ func (r *Refresher) Run(ctx context.Context) error {
 		needsRefresh = true
 	}
 
-	nextDelay := r.cfg.RefreshInterval
+	nextDelay := r.refreshDelay()
 	if needsRefresh {
 		if err := r.refreshOnce(ctx); err != nil {
 			nextDelay = r.cfg.RetryInterval
@@ -94,13 +94,13 @@ func (r *Refresher) Run(ctx context.Context) error {
 			if err := r.refreshOnce(ctx); err != nil {
 				timer.Reset(r.cfg.RetryInterval)
 			} else {
-				timer.Reset(r.cfg.RefreshInterval)
+				timer.Reset(r.refreshDelay())
 			}
 		case <-timer.C:
 			if err := r.refreshOnce(ctx); err != nil {
 				timer.Reset(r.cfg.RetryInterval)
 			} else {
-				timer.Reset(r.cfg.RefreshInterval)
+				timer.Reset(r.refreshDelay())
 			}
 		}
 	}
@@ -138,4 +138,12 @@ func (r *Refresher) refreshOnce(parentCtx context.Context) (err error) {
 	}
 	r.logger.Info("currency rates refreshed")
 	return nil
+}
+
+// Coordinated instances poll shared state; only a due lease owner contacts CBR.
+func (r *Refresher) refreshDelay() time.Duration {
+	if r.service.coordinator != nil && r.cfg.RefreshInterval > 30*time.Second {
+		return 30 * time.Second
+	}
+	return r.cfg.RefreshInterval
 }

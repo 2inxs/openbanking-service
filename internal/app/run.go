@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/2inxs/openbanking-service/internal/config"
 	"github.com/2inxs/openbanking-service/internal/infrastructure/cache"
@@ -27,6 +28,7 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	rateRepo := postgres.NewRateRepository(pool)
 
 	currencySvc := currency.NewService(cbrClient, rateRepo).WithCache(rateCache)
+	currencySvc.WithRefreshCoordinator(postgres.NewRateRefreshCoordinator(pool), cfg.Rates.RefreshInterval, cfg.Rates.RetryInterval, cfg.Rates.RequestTimeout+cfg.Database.StatementTimeout+5*time.Second)
 	refresher := currency.NewRefresher(currencySvc, currency.RefresherConfig{
 		RefreshInterval: cfg.Rates.RefreshInterval,
 		RetryInterval:   cfg.Rates.RetryInterval,
