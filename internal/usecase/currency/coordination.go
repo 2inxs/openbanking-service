@@ -20,7 +20,7 @@ type RefreshCoordinator interface {
 	Fail(context.Context, RefreshLease, time.Duration) error
 }
 
-// WithRefreshCoordinator enables shared scheduling for latest and historical refreshes.
+// WithRefreshCoordinator configures shared scheduling before workers or request handlers are started.
 func (s *Service) WithRefreshCoordinator(c RefreshCoordinator, interval, retry, lease time.Duration) *Service {
 	s.coordinator = c
 	s.refreshInterval = interval
@@ -39,8 +39,6 @@ func (s *Service) coordinatedRefresh(ctx context.Context, key string, fetch func
 	}
 	if !acquired {
 		// Followers read shared storage; contention is not a provider failure.
-		s.syncMu.Lock()
-		defer s.syncMu.Unlock()
 		_, err := s.Warmup(ctx)
 		return err
 	}
@@ -56,8 +54,6 @@ func (s *Service) coordinatedRefresh(ctx context.Context, key string, fetch func
 	if err != nil {
 		return fmt.Errorf("currency: fetch coordinated rates: %w", err)
 	}
-	s.syncMu.Lock()
-	defer s.syncMu.Unlock()
 	filtered, err := s.filterSupported(ctx, daily)
 	if err != nil {
 		return err

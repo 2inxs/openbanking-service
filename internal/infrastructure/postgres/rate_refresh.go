@@ -21,6 +21,9 @@ func NewRateRefreshCoordinator(db refreshDB) *RateRefreshCoordinator {
 	return &RateRefreshCoordinator{db: db}
 }
 func validRefreshDuration(d time.Duration) bool { return d >= time.Microsecond }
+func validRefreshLease(lease currency.RefreshLease) bool {
+	return lease.Key != "" && lease.Version > 0 && validIDs(lease.Owner) == nil
+}
 func (c *RateRefreshCoordinator) Claim(ctx context.Context, key string, lease time.Duration) (currency.RefreshLease, bool, error) {
 	if key == "" || !validRefreshDuration(lease) {
 		return currency.RefreshLease{}, false, domain.ErrInvalidModel
@@ -41,7 +44,7 @@ func (c *RateRefreshCoordinator) Claim(ctx context.Context, key string, lease ti
 	return result, true, nil
 }
 func (c *RateRefreshCoordinator) Complete(ctx context.Context, lease currency.RefreshLease, daily domain.DailyRates, interval time.Duration) error {
-	if !validRefreshDuration(interval) {
+	if !validRefreshDuration(interval) || !validRefreshLease(lease) {
 		return domain.ErrInvalidModel
 	}
 	tx, err := c.db.Begin(ctx)
@@ -75,7 +78,7 @@ func (c *RateRefreshCoordinator) Complete(ctx context.Context, lease currency.Re
 	return repositoryError(tx.Commit(ctx), ErrUnavailable, domain.ErrInvalidModel)
 }
 func (c *RateRefreshCoordinator) Fail(ctx context.Context, lease currency.RefreshLease, retry time.Duration) error {
-	if !validRefreshDuration(retry) {
+	if !validRefreshDuration(retry) || !validRefreshLease(lease) {
 		return domain.ErrInvalidModel
 	}
 	_, err := c.db.Exec(ctx, `UPDATE rate_refresh_leases SET lease_until=clock_timestamp(),next_attempt_at=clock_timestamp()+$4::bigint*interval '1 microsecond'
