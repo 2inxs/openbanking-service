@@ -67,28 +67,59 @@ func TestCrossSourceDeduplicationBetweenAPIAndStatements(t *testing.T) {
 	}
 }
 
-func TestUnicodeExternalIDPassesStatementParseToDeduplicationKey(t *testing.T) {
+type captureUnicodeImporter struct {
+	savedRows []usecasestmt.TransactionRow
+}
+
+func (c *captureUnicodeImporter) ImportStream(
+	_ context.Context,
+	target usecasestmt.ImportTargetAccount,
+	_ string,
+	chunks <-chan usecasestmt.TransactionChunk,
+	finalize usecasestmt.StreamFinalizer,
+) (usecasestmt.ImportResult, error) {
+	for ch := range chunks {
+		c.savedRows = append(c.savedRows, ch.Rows...)
+	}
+	if _, _, err := finalize(); err != nil {
+		return usecasestmt.ImportResult{}, err
+	}
+	return usecasestmt.ImportResult{
+		ImportID:      "imp-unicode",
+		AccountID:     target.ID,
+		ImportedCount: len(c.savedRows),
+	}, nil
+}
+
+func TestUnicodeExternalIDPassesStatementImportAndDeduplication(t *testing.T) {
 	accID := domain.AccountID("11111111-1111-1111-1111-111111111111")
 	unicodeID := "ОПЕР-" + strings.Repeat("Ю", 200) // 205 рун, 410 байт (< 255 символов)
 
 	csvContent := "account_number,booked_at,amount,currency,external_id,description\n" +
 		"40817810099910004312,2026-11-25,-500.00,RUB," + unicodeID + ",Оплата услуг\n"
 
-	parser := statement.NewCSVParser()
-	chunks, finalize := parser.ParseStream(context.Background(), strings.NewReader(csvContent))
+	repo := &captureUnicodeImporter{}
+	svc := usecasestmt.NewImportService(repo, statement.NewCSVParser(), statement.NewXLSXParser(), nil, nil)
 
-	var rows []usecasestmt.TransactionRow
-	for ch := range chunks {
-		rows = append(rows, ch.Rows...)
+	res, err := svc.Import(
+		context.Background(),
+		usecasestmt.ImportTargetAccount{
+			ID:            accID,
+			UserID:        "user-1",
+			AccountNumber: "40817810099910004312",
+			Currency:      money.RUB,
+		},
+		"statement.csv",
+		strings.NewReader(csvContent),
+	)
+	if err != nil {
+		t.Fatalf("expected Unicode external_id import to succeed, got %v", err)
 	}
-	if _, rowErrs, err := finalize(); err != nil || len(rowErrs) != 0 {
-		t.Fatalf("expected valid CSV parse for Unicode external_id, err=%v rowErrs=%v", err, rowErrs)
-	}
-	if len(rows) != 1 {
-		t.Fatalf("expected 1 parsed row, got %d", len(rows))
+	if res.ImportedCount != 1 || len(repo.savedRows) != 1 {
+		t.Fatalf("expected 1 row to reach persistence, got res=%+v rows=%d", res, len(repo.savedRows))
 	}
 
-	key, strategy, err := statement.RowDeduplicationKey(accID, "imp-unicode", rows[0])
+	key, strategy, err := statement.RowDeduplicationKey(accID, res.ImportID, repo.savedRows[0])
 	if err != nil {
 		t.Fatalf("expected Unicode external_id to pass deduplication, got %v", err)
 	}
