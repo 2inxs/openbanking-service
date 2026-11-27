@@ -76,7 +76,7 @@ func (c *captureUnicodeImporter) ImportStream(
 	target usecasestmt.ImportTargetAccount,
 	_ string,
 	chunks <-chan usecasestmt.TransactionChunk,
-	finalize usecasestmt.StreamFinalizer,
+	finalize func() (string, []usecasestmt.RowError, error),
 ) (usecasestmt.ImportResult, error) {
 	for ch := range chunks {
 		c.savedRows = append(c.savedRows, ch.Rows...)
