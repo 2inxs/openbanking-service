@@ -75,9 +75,7 @@ func TestUnicodeExternalIDPassesStatementParseToDeduplicationKey(t *testing.T) {
 		"40817810099910004312,2026-11-25,-500.00,RUB," + unicodeID + ",Оплата услуг\n"
 
 	parser := statement.NewCSVParser()
-	chunks, finalize := parser.ParseStream(context.Background(), strings.NewReader(csvContent), usecasestmt.ParseOptions{
-		ExpectedCurrency: money.RUB,
-	})
+	chunks, finalize := parser.ParseStream(context.Background(), strings.NewReader(csvContent))
 
 	var rows []usecasestmt.TransactionRow
 	for ch := range chunks {
@@ -89,6 +87,7 @@ func TestUnicodeExternalIDPassesStatementParseToDeduplicationKey(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 parsed row, got %d", len(rows))
 	}
+
 	key, strategy, err := statement.RowDeduplicationKey(accID, "imp-unicode", rows[0])
 	if err != nil {
 		t.Fatalf("expected Unicode external_id to pass deduplication, got %v", err)
