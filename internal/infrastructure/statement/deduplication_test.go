@@ -68,7 +68,12 @@ func TestCrossSourceDeduplicationBetweenAPIAndStatements(t *testing.T) {
 }
 
 type captureUnicodeImporter struct {
+	target    usecasestmt.ImportTargetAccount
 	savedRows []usecasestmt.TransactionRow
+}
+
+func (c *captureUnicodeImporter) GetTargetAccount(_ context.Context, _ domain.UserID, _ domain.AccountID) (usecasestmt.ImportTargetAccount, error) {
+	return c.target, nil
 }
 
 func (c *captureUnicodeImporter) ImportStream(
@@ -98,19 +103,23 @@ func TestUnicodeExternalIDPassesStatementImportAndDeduplication(t *testing.T) {
 	csvContent := "account_number,booked_at,amount,currency,external_id,description\n" +
 		"40817810099910004312,2026-11-25,-500.00,RUB," + unicodeID + ",Оплата услуг\n"
 
-	repo := &captureUnicodeImporter{}
-	svc := usecasestmt.NewImportService(repo, statement.NewCSVParser(), statement.NewXLSXParser(), nil, nil)
-
-	res, err := svc.Import(
-		context.Background(),
-		usecasestmt.ImportTargetAccount{
+	repo := &captureUnicodeImporter{
+		target: usecasestmt.ImportTargetAccount{
 			ID:            accID,
-			UserID:        "user-1",
 			AccountNumber: "40817810099910004312",
 			Currency:      money.RUB,
 		},
-		"statement.csv",
-		strings.NewReader(csvContent),
+	}
+	svc := usecasestmt.NewImportService(statement.NewCSVParser(), statement.NewXLSXParser(), repo)
+
+	res, err := svc.Import(
+		context.Background(),
+		usecasestmt.ImportCommand{
+			UserID:    "user-1",
+			AccountID: accID,
+			FileName:  "statement.csv",
+			Reader:    strings.NewReader(csvContent),
+		},
 	)
 	if err != nil {
 		t.Fatalf("expected Unicode external_id import to succeed, got %v", err)
@@ -119,7 +128,7 @@ func TestUnicodeExternalIDPassesStatementImportAndDeduplication(t *testing.T) {
 		t.Fatalf("expected 1 row to reach persistence, got res=%+v rows=%d", res, len(repo.savedRows))
 	}
 
-	key, strategy, err := statement.RowDeduplicationKey(accID, res.ImportID, repo.savedRows[0])
+	key, strategy, err := statement.RowDeduplicationKey(accID, res.ImportID, repo.savedRows)
 	if err != nil {
 		t.Fatalf("expected Unicode external_id to pass deduplication, got %v", err)
 	}
