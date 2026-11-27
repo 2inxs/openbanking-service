@@ -29,7 +29,7 @@ const transactionColumns = `t.id::text,t.account_id::text,COALESCE(t.statement_i
 
 func transactionError(err error) error {
 	var pe *pgconn.PgError
-	if errors.As(err, &pe) && pe.Code == "23505" {
+	if errors.As(err, &pe) && pe.Code == "23505" && (pe.ConstraintName == "transactions_external_uq" || pe.ConstraintName == "transactions_dedup_uq") {
 		return tr.ErrConflict
 	}
 	return repositoryError(err, tr.ErrNotFound, domain.ErrInvalidModel)
