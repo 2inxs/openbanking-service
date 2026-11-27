@@ -38,11 +38,14 @@ type RateCache interface {
 }
 
 type Service struct {
-	provider RateProvider
-	repo     RateRepository
-	cache    RateCache
-	nowFn    func() time.Time
-	syncMu   sync.Mutex
+	provider                                      RateProvider
+	repo                                          RateRepository
+	cache                                         RateCache
+	nowFn                                         func() time.Time
+	syncMu                                        sync.Mutex
+	warmupVersion                                 uint64
+	coordinator                                   RefreshCoordinator
+	refreshInterval, retryInterval, leaseDuration time.Duration
 }
 
 func NewService(provider RateProvider, repo RateRepository) *Service {
@@ -53,6 +56,7 @@ func NewService(provider RateProvider, repo RateRepository) *Service {
 	}
 }
 
+// WithCache configures the service before workers or request handlers are started.
 func (s *Service) WithCache(c RateCache) *Service {
 	s.cache = c
 	return s
@@ -82,6 +86,10 @@ func (s *Service) filterSupported(ctx context.Context, daily domain.DailyRates) 
 // Warmup загружает последние сохранённые курсы из БД при старте
 // и возвращает true, если курсы отсутствуют или устарели (нужно обновление).
 func (s *Service) Warmup(ctx context.Context) (bool, error) {
+	s.syncMu.Lock()
+	s.warmupVersion++
+	version := s.warmupVersion
+	s.syncMu.Unlock()
 	now := s.nowFn()
 
 	candidates := []money.Currency{money.Currency("USD"), money.Currency("EUR"), money.Currency("JPY")}
@@ -120,15 +128,23 @@ func (s *Service) Warmup(ctx context.Context) (bool, error) {
 	}
 
 	if s.cache != nil {
-		s.cache.Replace(domain.DailyRates{
-			Date:  latestDate,
-			Rates: loaded,
-		}, now.UTC())
+		s.syncMu.Lock()
+		currentDate, _, ok := s.cache.Meta()
+		if version == s.warmupVersion && (!ok || !latestDate.Before(currentDate)) {
+			s.cache.Replace(domain.DailyRates{
+				Date:  latestDate,
+				Rates: loaded,
+			}, now.UTC())
+		}
+		s.syncMu.Unlock()
 	}
 	return isStale(latestDate, now), nil
 }
 
 func (s *Service) Refresh(ctx context.Context) error {
+	if s.coordinator != nil {
+		return s.coordinatedRefresh(ctx, "cbr:latest", s.provider.FetchLatest)
+	}
 	daily, err := s.provider.FetchLatest(ctx)
 	if err != nil {
 		return fmt.Errorf("currency: fetch latest rates: %w", err)
@@ -147,12 +163,20 @@ func (s *Service) Refresh(ctx context.Context) error {
 	if s.cache != nil {
 		currentDate, _, ok := s.cache.Meta()
 		if !ok || !filtered.Date.Before(currentDate) {
+			s.warmupVersion++
 			s.cache.Replace(filtered, s.nowFn().UTC())
 		}
 	}
 	return nil
 }
 func (s *Service) SyncByDate(ctx context.Context, date time.Time) error {
+	if date.IsZero() {
+		return domain.ErrInvalidModel
+	}
+	if s.coordinator != nil {
+		key := "cbr:date:" + date.Format("2006-01-02")
+		return s.coordinatedRefresh(ctx, key, func(ctx context.Context) (domain.DailyRates, error) { return s.provider.FetchByDate(ctx, date) })
+	}
 	daily, err := s.provider.FetchByDate(ctx, date)
 	if err != nil {
 		return fmt.Errorf("currency: fetch rates by date: %w", err)
@@ -169,6 +193,7 @@ func (s *Service) SyncByDate(ctx context.Context, date time.Time) error {
 	if s.cache != nil {
 		currentDate, _, ok := s.cache.Meta()
 		if !ok || !filtered.Date.Before(currentDate) {
+			s.warmupVersion++
 			s.cache.Replace(filtered, s.nowFn().UTC())
 		}
 	}
