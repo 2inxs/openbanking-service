@@ -92,4 +92,22 @@ func TestUnitOfWorkCommitRollbackAndImportStates(t *testing.T) {
 	if _, err := imports.Transition(ctx, u, completed, st.ImportCompleted); !errors.Is(err, domain.ErrInvalidModel) {
 		t.Fatalf("terminal transition: %v", err)
 	}
+	cancelCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	canceledAttempt := attempt
+	canceledAttempt.ID = domain.StatementImportID(newID(t))
+	canceledAttempt.FileSHA256 = strings.Repeat("b", 64)
+	err = runner.Within(cancelCtx, func(repos persistence.Repositories) error {
+		if _, err := repos.Imports.Create(cancelCtx, u, canceledAttempt); err != nil {
+			return err
+		}
+		cancel()
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled operation committed: %v", err)
+	}
+	if _, err := imports.Get(ctx, u, canceledAttempt.ID); !errors.Is(err, st.ErrImportNotFound) {
+		t.Fatalf("canceled import survived: %v", err)
+	}
 }
