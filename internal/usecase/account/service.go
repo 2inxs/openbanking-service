@@ -10,7 +10,6 @@ import (
 
 	"github.com/2inxs/openbanking-service/internal/domain"
 	"github.com/2inxs/openbanking-service/internal/domain/money"
-	"github.com/2inxs/openbanking-service/pkg/logger"
 )
 
 var (
@@ -22,24 +21,24 @@ const maxStrictIDLen = 128
 
 // AccountBalance представляет последний известный остаток по счёту и момент его актуальности.
 type AccountBalance struct {
-	Amount   money.Amount   `json:"amount"`
-	Currency money.Currency `json:"currency"`
-	AsOf     time.Time      `json:"as_of"`
+	Amount   money.Amount
+	Currency money.Currency
+	AsOf     time.Time
 }
 
-// AccountSummary представляет безопасную для отображения модель счёта пользователя.
+// AccountSummary представляет модель счёта пользователя на уровне сценариев.
 type AccountSummary struct {
-	ID                domain.AccountID        `json:"id"`
-	UserID            domain.UserID           `json:"user_id"`
-	BankID            domain.BankID           `json:"bank_id"`
-	ConnectionID      domain.BankConnectionID `json:"connection_id,omitempty"`
-	ExternalAccountID string                  `json:"external_account_id,omitempty"`
-	Number            string                  `json:"account_number,omitempty"`
-	Name              string                  `json:"name"`
-	Type              domain.AccountTypeID    `json:"type"`
-	Status            domain.AccountStatusID  `json:"status"`
-	Currency          money.Currency          `json:"currency"`
-	Balance           *AccountBalance         `json:"balance"` // nil — остаток неизвестен
+	ID                domain.AccountID
+	UserID            domain.UserID
+	BankID            domain.BankID
+	ConnectionID      domain.BankConnectionID
+	ExternalAccountID string
+	Number            string
+	Name              string
+	Type              domain.AccountTypeID
+	Status            domain.AccountStatusID
+	Currency          money.Currency
+	Balance           *AccountBalance // nil — остаток неизвестен
 }
 
 type Service struct {
@@ -58,13 +57,6 @@ func validateStrictID(raw string) error {
 		if raw[i] <= 0x20 || raw[i] == 0x7f {
 			return ErrInvalidInput
 		}
-	}
-	return nil
-}
-
-func checkContextUserMatch(ctx context.Context, userID domain.UserID) error {
-	if ctxUser := strings.TrimSpace(logger.FieldsFromContext(ctx).UserID); ctxUser != "" && ctxUser != string(userID) {
-		return ErrAccountNotFound
 	}
 	return nil
 }
@@ -110,9 +102,6 @@ func (s *Service) ListAccounts(ctx context.Context, userID domain.UserID) ([]Acc
 	if err := validateStrictID(string(userID)); err != nil {
 		return nil, err
 	}
-	if err := checkContextUserMatch(ctx, userID); err != nil {
-		return nil, err
-	}
 
 	accounts, err := s.repo.ListByUser(ctx, userID)
 	if err != nil {
@@ -150,9 +139,6 @@ func (s *Service) GetAccount(ctx context.Context, userID domain.UserID, accountI
 		return AccountSummary{}, err
 	}
 	if err := validateStrictID(string(accountID)); err != nil {
-		return AccountSummary{}, err
-	}
-	if err := checkContextUserMatch(ctx, userID); err != nil {
 		return AccountSummary{}, err
 	}
 
