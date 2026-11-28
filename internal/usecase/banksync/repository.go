@@ -11,6 +11,10 @@ import (
 var (
 	ErrConnectionNotFound = errors.New("bank connection: not found")
 	ErrConnectionConflict = errors.New("bank connection: identity or ownership conflict")
+	ErrBankNotFound       = errors.New("bank: not found")
+	ErrBankUnauthorized   = errors.New("bank: access denied")         // токен не принят (401)
+	ErrBankUnavailable    = errors.New("bank: unavailable")           // сеть, таймаут, 5xx, неожиданный статус
+	ErrBankInvalidData    = errors.New("bank: invalid response data") // ответ не по стандарту
 )
 
 type ConnectionRepository interface {
@@ -41,4 +45,8 @@ type AccountRepository interface {
 	BindExternal(context.Context, domain.UserID, domain.AccountID, domain.BankConnectionID, string) (domain.Account, error)
 	// UpdateBalance ignores snapshots older than the saved bank balance.
 	UpdateBalance(context.Context, domain.UserID, domain.AccountID, domain.BalanceSnapshot) error
+}
+
+type BankRepository interface {
+	GetByCode(ctx context.Context, code domain.BankCode) (domain.BankID, error)
 }

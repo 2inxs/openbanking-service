@@ -16,6 +16,7 @@ var _ banksync.ConnectionRepository = (*ConnectionRepository)(nil)
 func NewConnectionRepository(db DBTX) *ConnectionRepository { return &ConnectionRepository{db: db} }
 
 const connectionColumns = `id::text, user_id::text, bank_id::text,
+ (SELECT code FROM banks WHERE banks.id = bank_connections.bank_id),
  COALESCE(external_customer_id, ''), status, last_synced_at, COALESCE(last_sync_error,''), version`
 
 var connectionStatuses = map[domain.ConnectionStatusID]string{
@@ -26,7 +27,7 @@ var connectionStatuses = map[domain.ConnectionStatusID]string{
 func scanConnection(row pgx.Row) (domain.BankConnection, error) {
 	var c domain.BankConnection
 	var status string
-	err := row.Scan(&c.ID, &c.UserID, &c.BankID, &c.CustomerID, &status, &c.LastSyncedAt, &c.LastSyncError, &c.Version)
+	err := row.Scan(&c.ID, &c.UserID, &c.BankID, &c.BankCode, &c.CustomerID, &status, &c.LastSyncedAt, &c.LastSyncError, &c.Version)
 	if err != nil {
 		return c, repositoryError(err, banksync.ErrConnectionNotFound, banksync.ErrConnectionConflict)
 	}

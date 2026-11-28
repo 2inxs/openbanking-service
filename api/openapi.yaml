@@ -157,11 +157,11 @@ paths:
           application/json:
             schema:
               type: object
-              required: [bank_id]
+              required: [bank_code]
               properties:
-                bank_id:
+                bank_code:
                   type: string
-                  description: Строковый код банка (banks.code)
+                  description: Код банка (banks.code)
                   example: "mockbank"
       responses:
         "200":
@@ -178,7 +178,35 @@ paths:
                 $ref: "#/components/schemas/BankConnection"
         "400":
           $ref: "#/components/responses/BadRequest"
-
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /bank-connections/{connectionId}:
+    get:
+      tags: [BankConnections]
+      summary: Текущее состояние подключения
+      description: >
+        Читает подключение текущего пользователя из БД. Не подключает банк заново,
+        не запускает синхронизацию и не обращается к банку или ЦБ.
+        Отсутствующее и чужое подключение дают одинаковый 404.
+      parameters:
+        - name: connectionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Текущее состояние подключения
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BankConnection"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /bank-connections/{connectionId}/sync:
     post:
       tags: [BankConnections]
@@ -316,11 +344,11 @@ components:
   schemas:
     Account:
       type: object
-      required: [id, bank_id, number, name, type, status, currency]
+      required: [id, bank_code, number, name, type, status, currency]
       properties:
         id:
           type: string
-        bank_id:
+        bank_code:
           type: string
         connection_id:
           type: string
@@ -400,11 +428,11 @@ components:
 
     BankConnection:
       type: object
-      required: [id, bank_id, status]
+      required: [id, bank_code, status]
       properties:
         id:
           type: string
-        bank_id:
+        bank_code:
           type: string
         status:
           type: string

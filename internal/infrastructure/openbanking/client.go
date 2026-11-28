@@ -15,9 +15,10 @@ import (
 )
 
 var (
-	ErrUnauthorized     = errors.New("openbanking: unauthorized") // 401: токен не принят
-	ErrUnexpectedStatus = errors.New("openbanking: unexpected HTTP status")
-	ErrResponseTooLarge = errors.New("openbanking: response too large")
+	ErrUnauthorized     = fmt.Errorf("openbanking: unauthorized: %w", banksync.ErrBankUnauthorized)
+	ErrUnexpectedStatus = fmt.Errorf("openbanking: unexpected HTTP status: %w", banksync.ErrBankUnavailable)
+	ErrResponseTooLarge = fmt.Errorf("openbanking: response too large: %w", banksync.ErrBankUnavailable)
+	ErrInvalidBankData  = fmt.Errorf("invalid bank data: %w", banksync.ErrBankInvalidData)
 	ErrInvalidConfig    = errors.New("openbanking: invalid client config")
 )
 
@@ -80,18 +81,18 @@ func (c *Client) get(ctx context.Context, path string, query url.Values) ([]byte
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("openbanking: GET %s: %w", path, err)
+		return nil, fmt.Errorf("openbanking: GET %s: %w: %w", path, banksync.ErrBankUnavailable, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized {
 		return nil, fmt.Errorf("%w: GET %s", ErrUnauthorized, path)
 	}
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK { // ← вот этот блок
 		return nil, fmt.Errorf("%w: %d on GET %s", ErrUnexpectedStatus, resp.StatusCode, path)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("openbanking: read GET %s: %w", path, err)
+		return nil, fmt.Errorf("openbanking: read GET %s: %w: %w", path, banksync.ErrBankUnavailable, err)
 	}
 	if len(body) > maxBodyBytes {
 		return nil, fmt.Errorf("%w: GET %s", ErrResponseTooLarge, path)

@@ -18,6 +18,7 @@ func (Secret) GoString() string     { return "[REDACTED]" }                   //
 func (Secret) LogValue() slog.Value { return slog.StringValue("[REDACTED]") } // для slog
 
 const DefaultMockBankURL = "http://127.0.0.1:8081/open-banking/v1/mockbank"
+const DefaultDemoUserID = "00000000-0000-4000-8000-000000000100"
 
 type BankConfig struct {
 	BaseURL string
@@ -35,6 +36,7 @@ type Config struct {
 	Database              DatabaseConfig
 	Rates                 RatesConfig
 	MockBank              BankConfig
+	DemoUserID            string
 	HTTPAddr              string
 	HTTPReadHeaderTimeout time.Duration
 	HTTPReadTimeout       time.Duration
@@ -67,6 +69,7 @@ func Load() (Config, error) {
 			RequestTimeout:  10 * time.Second,
 		},
 		MockBank:              BankConfig{BaseURL: DefaultMockBankURL},
+		DemoUserID:            DefaultDemoUserID,
 		HTTPAddr:              "127.0.0.1:8080",
 		HTTPReadHeaderTimeout: 5 * time.Second,
 		HTTPReadTimeout:       15 * time.Second,
@@ -90,6 +93,9 @@ func Load() (Config, error) {
 		cfg.MockBank.BaseURL = value
 	}
 	cfg.MockBank.Token = Secret(strings.TrimSpace(os.Getenv("MOCKBANK_DEMO_TOKEN")))
+	if value := strings.TrimSpace(os.Getenv("DEMO_USER_ID")); value != "" {
+		cfg.DemoUserID = value
+	}
 	if value := os.Getenv("HTTP_ADDR"); value != "" {
 		cfg.HTTPAddr = value
 	}

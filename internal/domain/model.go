@@ -13,6 +13,7 @@ import (
 // Локальные ID не совпадают с внешними идентификаторами, выданными банком.
 type UserID string
 type BankID string
+type BankCode string
 type AccountID string
 type BankConnectionID string
 type BankCustomerID string
@@ -43,6 +44,7 @@ type BankConnection struct {
 	ID            BankConnectionID
 	UserID        UserID
 	BankID        BankID
+	BankCode      BankCode
 	CustomerID    BankCustomerID // Может отсутствовать, если банк не выдаёт ID клиента.
 	Status        ConnectionStatusID
 	LastSyncedAt  *time.Time

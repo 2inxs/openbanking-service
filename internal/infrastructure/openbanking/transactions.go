@@ -9,6 +9,36 @@ import (
 	"github.com/2inxs/openbanking-service/internal/usecase/banksync"
 )
 
+type transactionsResponse struct {
+	Data transactionsData `json:"Data"`
+}
+
+type transactionsData struct {
+	Transaction []bankTransaction `json:"Transaction"`
+}
+
+type bankTransaction struct {
+	AccountID              string               `json:"accountId"`
+	TransactionID          string               `json:"transactionId"`
+	CreditDebitIndicator   string               `json:"creditDebitIndicator"`
+	Status                 string               `json:"status"`
+	BookingDateTime        string               `json:"bookingDateTime"`
+	ValueDateTime          string               `json:"valueDateTime"`
+	TransactionInformation string               `json:"transactionInformation"`
+	Amount                 bankAmount           `json:"Amount"`
+	MerchantDetails        *bankMerchantDetails `json:"MerchantDetails"`
+}
+
+type bankMerchantDetails struct {
+	MerchantName         string `json:"merchantName"`
+	MerchantCategoryCode string `json:"merchantCategoryCode"`
+}
+
+type bankAmount struct {
+	Amount   string `json:"amount"`
+	Currency string `json:"currency"`
+}
+
 func normalizeTransaction(tx bankTransaction, accountID string) (banksync.BankTransaction, error) {
 	if tx.TransactionID == "" {
 		return banksync.BankTransaction{}, fmt.Errorf("%w: transaction of account %s: empty transactionId", ErrInvalidBankData, accountID)
