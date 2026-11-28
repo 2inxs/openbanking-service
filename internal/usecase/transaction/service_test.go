@@ -266,6 +266,15 @@ func TestListAccountTransactions_PaginationPeriodAndAccess(t *testing.T) {
 	if txRepo.calls != 0 {
 		t.Fatalf("expected txRepo not to be called for foreign account, calls=%d", txRepo.calls)
 	}
+	// 5. Защита на уровне usecase, если AccountReader не отфильтровал userID (bypass = true).
+	accRepo.bypass = true
+	if _, err := svc.ListAccountTransactions(ctx, transaction.ListQuery{
+		UserID:    user1,
+		AccountID: accForeign,
+	}); !errors.Is(err, transaction.ErrAccountNotFound) {
+		t.Fatalf("expected ErrAccountNotFound when AccountReader bypasses ownership filter, got %v", err)
+	}
+	accRepo.bypass = false
 }
 
 func TestListAccountTransactions_ValidationErrors(t *testing.T) {
