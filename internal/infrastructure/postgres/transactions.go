@@ -29,7 +29,7 @@ const transactionColumns = `t.id::text,t.account_id::text,COALESCE(t.statement_i
 
 func transactionError(err error) error {
 	var pe *pgconn.PgError
-	if errors.As(err, &pe) && pe.Code == "23505" {
+	if errors.As(err, &pe) && pe.Code == "23505" && (pe.ConstraintName == "transactions_external_uq" || pe.ConstraintName == "transactions_dedup_uq") {
 		return tr.ErrConflict
 	}
 	return repositoryError(err, tr.ErrNotFound, domain.ErrInvalidModel)
@@ -151,6 +151,13 @@ func (r *TransactionRepository) List(ctx context.Context, user domain.UserID, f 
 		}
 		afterTime = &f.After.OccurredAt
 		afterID = string(f.After.ID)
+	}
+	var accessible bool
+	if err := r.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM accounts WHERE id=$1 AND user_id=$2)`, string(f.AccountID), string(user)).Scan(&accessible); err != nil {
+		return tr.Page{}, transactionError(err)
+	}
+	if !accessible {
+		return tr.Page{}, tr.ErrNotFound
 	}
 	rows, err := r.db.Query(ctx, `SELECT `+transactionColumns+` FROM transactions t JOIN accounts a ON a.id=t.account_id
  WHERE a.user_id=$1 AND t.account_id=$2 AND ($3::timestamptz IS NULL OR t.occurred_at >= $3) AND ($4::timestamptz IS NULL OR t.occurred_at < $4)
