@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	st "github.com/2inxs/openbanking-service/internal/usecase/statement"
 	"github.com/jackc/pgx/v5"
 	"strings"
@@ -14,6 +15,41 @@ type preparationDB struct {
 	finalized bool
 	began     bool
 	t         *testing.T
+}
+
+func TestStatementMismatchDoesNotOpenTransaction(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*st.TransactionChunk)
+		want   error
+	}{
+		{"account_number", func(c *st.TransactionChunk) { c.AccountNumber = "different" }, st.ErrAccountNumberMismatch},
+		{"currency", func(c *st.TransactionChunk) { c.Currency = "USD" }, st.ErrAccountCurrencyMismatch},
+	} {
+		for _, invalidIndex := range []int{0, 2} {
+			t.Run(fmt.Sprintf("%s/chunk_%d", tc.name, invalidIndex), func(t *testing.T) {
+				db := &preparationDB{t: t}
+				chunks := make(chan st.TransactionChunk, 3)
+				for index := 0; index < 3; index++ {
+					chunk := st.TransactionChunk{AccountNumber: "account", Currency: "RUB", Rows: []st.TransactionRow{{}}}
+					if index == invalidIndex {
+						tc.change(&chunk)
+					}
+					chunks <- chunk
+				}
+				close(chunks)
+				_, err := NewStatementImportRepository(db).ImportStream(context.Background(), st.ImportTargetAccount{
+					AccountNumber: "account", Currency: "RUB",
+				}, "test.csv", chunks, func() (string, []st.RowError, error) {
+					db.finalized = true
+					return strings.Repeat("a", 64), nil, nil
+				})
+				if !errors.Is(err, tc.want) || db.began {
+					t.Fatalf("mismatch opened transaction or lost error: began=%v err=%v", db.began, err)
+				}
+			})
+		}
+	}
 }
 
 func (d *preparationDB) Begin(context.Context) (pgx.Tx, error) {

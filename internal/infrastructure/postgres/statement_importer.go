@@ -163,6 +163,13 @@ func (r *StatementImportRepository) ImportStream(
 		}
 		preparedCount += len(chunk.Rows)
 		if len(chunk.Rows) > 0 {
+			if strings.TrimSpace(target.AccountNumber) != "" &&
+				strings.TrimSpace(chunk.AccountNumber) != strings.TrimSpace(target.AccountNumber) {
+				return usecasestmt.ImportResult{}, fmt.Errorf("%w: got %q, want %q", usecasestmt.ErrAccountNumberMismatch, chunk.AccountNumber, target.AccountNumber)
+			}
+			if chunk.Currency != target.Currency {
+				return usecasestmt.ImportResult{}, fmt.Errorf("%w: got %q, want %q", usecasestmt.ErrAccountCurrencyMismatch, chunk.Currency, target.Currency)
+			}
 			prepared = append(prepared, chunk)
 		}
 	}
@@ -184,14 +191,6 @@ func (r *StatementImportRepository) ImportStream(
 		if err := ensureTx(); err != nil {
 			return usecasestmt.ImportResult{}, err
 		}
-		if strings.TrimSpace(target.AccountNumber) != "" &&
-			strings.TrimSpace(chunk.AccountNumber) != strings.TrimSpace(target.AccountNumber) {
-			return usecasestmt.ImportResult{}, fmt.Errorf("%w: got %q, want %q", usecasestmt.ErrAccountNumberMismatch, chunk.AccountNumber, target.AccountNumber)
-		}
-		if chunk.Currency != target.Currency {
-			return usecasestmt.ImportResult{}, fmt.Errorf("%w: got %q, want %q", usecasestmt.ErrAccountCurrencyMismatch, chunk.Currency, target.Currency)
-		}
-
 		chunkIndex++
 		copyStart := time.Now()
 
