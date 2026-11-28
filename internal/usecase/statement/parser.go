@@ -27,8 +27,8 @@ var (
 )
 
 type RowError struct {
-	Row     int    `json:"row"`
-	Message string `json:"message"`
+	Row     int
+	Message string
 }
 
 func (e RowError) Error() string {
