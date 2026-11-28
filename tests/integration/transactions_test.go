@@ -31,6 +31,24 @@ func TestTransactionRepositoryIsolationPaginationAndConflicts(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo := postgres.NewTransactionRepository(tx)
+	empty, err := repo.List(ctx, u, tr.Filter{AccountID: a.ID})
+	if err != nil || empty.Items == nil || len(empty.Items) != 0 || empty.Next != nil {
+		t.Fatalf("empty owned account: %+v %v", empty, err)
+	}
+	for _, tc := range []struct {
+		name    string
+		user    domain.UserID
+		account domain.AccountID
+	}{
+		{"missing", u, domain.AccountID(newID(t))},
+		{"foreign", domain.UserID(newID(t)), a.ID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := repo.List(ctx, tc.user, tr.Filter{AccountID: tc.account}); !errors.Is(err, tr.ErrNotFound) {
+				t.Fatalf("unavailable account returned an empty list: %v", err)
+			}
+		})
+	}
 	first := transactionRecord(t, a.ID, 1)
 	for n := 1; n <= 3; n++ {
 		if _, err := repo.Create(ctx, u, transactionRecord(t, a.ID, n)); err != nil {
@@ -77,7 +95,7 @@ func TestTransactionRepositoryIsolationPaginationAndConflicts(t *testing.T) {
 		t.Fatalf("FK error hidden as duplicate: %v", err)
 	}
 	from := first.OccurredAt.Add(time.Hour)
-	empty, err := repo.List(ctx, u, tr.Filter{AccountID: a.ID, From: &from})
+	empty, err = repo.List(ctx, u, tr.Filter{AccountID: a.ID, From: &from})
 	if err != nil || len(empty.Items) != 0 {
 		t.Fatalf("period %+v %v", empty, err)
 	}
