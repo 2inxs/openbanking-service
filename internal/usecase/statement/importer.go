@@ -62,11 +62,11 @@ type ImportCommand struct {
 }
 
 type ImportResult struct {
-	ImportID      domain.StatementImportID `json:"import_id"`
-	AccountID     domain.AccountID         `json:"account_id"`
-	ImportedCount int                      `json:"imported_count"`
-	SkippedCount  int                      `json:"skipped_count"`
-	RowErrors     []RowError               `json:"row_errors,omitempty"`
+	ImportID      domain.StatementImportID
+	AccountID     domain.AccountID
+	ImportedCount int
+	SkippedCount  int
+	RowErrors     []RowError
 }
 
 type ImportRepository interface {
@@ -173,10 +173,6 @@ func (s *ImportService) Import(ctx context.Context, cmd ImportCommand) (ImportRe
 		})
 	}
 
-	if ctxUser := strings.TrimSpace(logger.FieldsFromContext(ctx).UserID); ctxUser != "" && userIDStr != "" && ctxUser != userIDStr {
-		recordAudit(domain.AuditStatusFailure, string(cmd.AccountID), map[string]string{"reason": "user_context_mismatch"})
-		return ImportResult{}, ErrAccountNotFound
-	}
 	if userIDStr == "" || strings.TrimSpace(string(cmd.AccountID)) == "" {
 		recordAudit(domain.AuditStatusFailure, string(cmd.AccountID), map[string]string{"reason": "missing_user_or_account"})
 		return ImportResult{}, ErrAccountNotFound
